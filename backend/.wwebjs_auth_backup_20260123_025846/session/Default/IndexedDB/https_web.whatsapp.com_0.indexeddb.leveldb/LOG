@@ -1,0 +1,29 @@
+2026/01/23-02:57:03.173 4188 Reusing MANIFEST C:\Users\fatih\OneDrive\Desktop\yapılacaklar\backend\.wwebjs_auth\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/01/23-02:57:03.174 4188 Recovering log #359
+2026/01/23-02:57:03.190 4188 Reusing old log C:\Users\fatih\OneDrive\Desktop\yapılacaklar\backend\.wwebjs_auth\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000359.log 
+2026/01/23-02:57:16.201 5510 Level-0 table #372: started
+2026/01/23-02:57:16.264 5510 Level-0 table #372: 1232096 bytes OK
+2026/01/23-02:57:16.270 5510 Delete type=0 #359
+2026/01/23-02:57:22.241 4188 Compacting 1@1 + 9@2 files
+2026/01/23-02:57:23.403 4188 Generated table #373@1: 64519 keys, 2230905 bytes
+2026/01/23-02:57:24.396 4188 Generated table #374@1: 32007 keys, 2201195 bytes
+2026/01/23-02:57:24.844 4188 Generated table #375@1: 51316 keys, 2212332 bytes
+2026/01/23-02:57:25.431 4188 Generated table #376@1: 23295 keys, 2182673 bytes
+2026/01/23-02:57:25.565 4188 Generated table #377@1: 2726 keys, 2154887 bytes
+2026/01/23-02:57:25.802 4188 Generated table #378@1: 14300 keys, 2196155 bytes
+2026/01/23-02:57:26.047 4188 Generated table #379@1: 24952 keys, 2214532 bytes
+2026/01/23-02:57:26.253 4188 Generated table #380@1: 64798 keys, 2203490 bytes
+2026/01/23-02:57:26.542 4188 Generated table #381@1: 86040 keys, 2234129 bytes
+2026/01/23-02:57:26.559 4188 Generated table #382@1: 1507 keys, 81870 bytes
+2026/01/23-02:57:26.559 4188 Compacted 1@1 + 9@2 files => 19912168 bytes
+2026/01/23-02:57:26.564 4188 compacted to: files[ 0 0 10 0 0 0 0 ]
+2026/01/23-02:57:26.565 4188 Delete type=2 #361
+2026/01/23-02:57:26.566 4188 Delete type=2 #362
+2026/01/23-02:57:26.566 4188 Delete type=2 #363
+2026/01/23-02:57:26.566 4188 Delete type=2 #364
+2026/01/23-02:57:26.566 4188 Delete type=2 #365
+2026/01/23-02:57:26.567 4188 Delete type=2 #366
+2026/01/23-02:57:26.567 4188 Delete type=2 #367
+2026/01/23-02:57:26.568 4188 Delete type=2 #368
+2026/01/23-02:57:26.568 4188 Delete type=2 #369
+2026/01/23-02:57:26.568 4188 Delete type=2 #372

@@ -1,0 +1,5 @@
+{
+  "name": "Planla - Akıllı Görev Yöneticisi",
+  "description": "Kategori bazlı, şık ve yapay zeka destekli bir yapılacaklar listesi uygulaması. Görevlerinizi kategorize edin ve Gemini ile akıllı öneriler alın.",
+  "requestFramePermissions": []
+}

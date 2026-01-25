@@ -40,6 +40,27 @@ export interface User {
   phoneNumber?: string;
 }
 
+export interface Rental {
+  id: string;
+  unitNumber: string;
+  tenantName: string;
+  dueDay: number;
+  amount: number;
+  isPaid: boolean;
+  paidMonth?: string;
+  lastReminderMonth?: string;
+  createdAt: number;
+}
+
+export interface AssetItem {
+  id: string;
+  name: string;
+  room: string;
+  assignedAt: string;
+  note: string;
+  createdAt: number;
+}
+
 export interface AppState {
   categories: Category[];
   tasks: Task[];

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Task, Category, User } from './types';
+import { Task, Category, User, Rental, AssetItem } from './types';
 import { DEFAULT_CATEGORIES, CATEGORY_COLORS, CATEGORY_ICONS } from './constants';
 import { PlusIcon, TrashIcon, SparklesIcon, CheckIcon } from './components/Icons';
 import { getSmartSuggestions } from './services/geminiService';
@@ -16,6 +16,9 @@ const App: React.FC = () => {
   const [isHydrated, setIsHydrated] = useState(false);
   const [nowTs, setNowTs] = useState(Date.now());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [activeSection, setActiveSection] = useState<'home' | 'tasks' | 'rentals' | 'assets'>('home');
+  const [rentals, setRentals] = useState<Rental[]>([]);
+  const [assets, setAssets] = useState<AssetItem[]>([]);
   
   // UI States
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
@@ -50,6 +53,21 @@ const App: React.FC = () => {
   const [newUserPassword, setNewUserPassword] = useState('');
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [isRentalModalOpen, setIsRentalModalOpen] = useState(false);
+  const [newRentalUnit, setNewRentalUnit] = useState('');
+  const [newRentalName, setNewRentalName] = useState('');
+  const [newRentalDueDay, setNewRentalDueDay] = useState('1');
+  const [newRentalAmount, setNewRentalAmount] = useState('');
+  const [isAssetModalOpen, setIsAssetModalOpen] = useState(false);
+  const [newAssetName, setNewAssetName] = useState('');
+  const [newAssetRoom, setNewAssetRoom] = useState('');
+  const [newAssetDate, setNewAssetDate] = useState('');
+  const [newAssetNote, setNewAssetNote] = useState('');
+  const [assetFilterRoom, setAssetFilterRoom] = useState('');
+  const [assetFilterText, setAssetFilterText] = useState('');
+  const [homeFilterStatus, setHomeFilterStatus] = useState<'active' | 'completed' | 'expired' | 'all'>('active');
+  const [homeFilterCategory, setHomeFilterCategory] = useState('all');
+  const [homeFilterText, setHomeFilterText] = useState('');
   
   // WhatsApp States
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
@@ -57,6 +75,7 @@ const App: React.FC = () => {
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [whatsAppEnabled, setWhatsAppEnabled] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('05536789487');
+  const [secondPhoneNumber, setSecondPhoneNumber] = useState('');
 
   useEffect(() => {
     const savedUsers = localStorage.getItem('planla_users_v1');
@@ -66,6 +85,9 @@ const App: React.FC = () => {
     const savedWhatsAppEnabled = localStorage.getItem('planla_whatsapp_enabled');
     const savedPhoneNumber = localStorage.getItem('planla_phone_number');
     const savedAuditOptions = localStorage.getItem('planla_audit_options_v1');
+    const savedRentals = localStorage.getItem('planla_rentals_v1');
+    const savedAssets = localStorage.getItem('planla_assets_v1');
+    const savedSecondPhoneNumber = localStorage.getItem('planla_phone_number_2');
 
     const defaultAdmin: User = {
       id: 'user-admin',
@@ -146,12 +168,29 @@ const App: React.FC = () => {
 
     if (savedWhatsAppEnabled) setWhatsAppEnabled(JSON.parse(savedWhatsAppEnabled));
     if (savedPhoneNumber) setPhoneNumber(savedPhoneNumber);
+    if (savedSecondPhoneNumber) setSecondPhoneNumber(savedSecondPhoneNumber);
     if (savedAuditOptions) {
       try {
         const parsed = JSON.parse(savedAuditOptions);
         if (Array.isArray(parsed)) setAuditOptions(parsed);
       } catch {
         setAuditOptions([]);
+      }
+    }
+    if (savedRentals) {
+      try {
+        const parsed = JSON.parse(savedRentals);
+        if (Array.isArray(parsed)) setRentals(parsed);
+      } catch {
+        setRentals([]);
+      }
+    }
+    if (savedAssets) {
+      try {
+        const parsed = JSON.parse(savedAssets);
+        if (Array.isArray(parsed)) setAssets(parsed);
+      } catch {
+        setAssets([]);
       }
     }
     setIsHydrated(true);
@@ -181,10 +220,21 @@ const App: React.FC = () => {
   }, [auditOptions, isHydrated]);
 
   useEffect(() => {
+    if (!isHydrated) return;
+    localStorage.setItem('planla_rentals_v1', JSON.stringify(rentals));
+  }, [rentals, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    localStorage.setItem('planla_assets_v1', JSON.stringify(assets));
+  }, [assets, isHydrated]);
+
+  useEffect(() => {
     if (currentUserId) {
       setNewTaskAssigneeId(currentUserId);
     }
   }, [currentUserId]);
+
 
   useEffect(() => {
     if (!isHydrated || categories.length === 0) return;
@@ -294,6 +344,55 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    if (!rentals.length) return;
+    const checkRentals = async () => {
+      const now = new Date();
+      const monthKey = getMonthKey(now);
+      const year = now.getFullYear();
+      const monthIndex = now.getMonth();
+      const reminders: Rental[] = [];
+
+      setRentals(prev => {
+        let changed = false;
+        const updated = prev.map(rental => {
+          const isPaidForMonth = rental.paidMonth === monthKey;
+          const dueDate = getDueDateForMonth(year, monthIndex, rental.dueDay);
+          const overdueAt = dueDate.getTime() + 3 * 24 * 60 * 60 * 1000;
+          const shouldRemind = !isPaidForMonth && now.getTime() >= overdueAt && rental.lastReminderMonth !== monthKey;
+          if (shouldRemind) {
+            reminders.push(rental);
+          }
+          if (rental.isPaid !== isPaidForMonth || shouldRemind) {
+            changed = true;
+            return {
+              ...rental,
+              isPaid: isPaidForMonth,
+              lastReminderMonth: shouldRemind ? monthKey : rental.lastReminderMonth
+            };
+          }
+          return rental;
+        });
+        return changed ? updated : prev;
+      });
+
+      if (!(whatsAppEnabled || whatsAppReady)) return;
+
+      for (const rental of reminders) {
+        const message = `⚠️ ${rental.unitNumber} dairesi (${rental.tenantName}) kirası 3 gündür gecikmede.`;
+        try {
+          await sendNotificationMessage(message);
+        } catch (error) {
+          console.error('WhatsApp kira hatası:', error);
+        }
+      }
+    };
+
+    checkRentals();
+    const interval = setInterval(checkRentals, 6 * 60 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [rentals, whatsAppEnabled, whatsAppReady, phoneNumber, secondPhoneNumber]);
+
   // WhatsApp durumunu periyodik kontrol et
   useEffect(() => {
     if (!whatsAppEnabled) return;
@@ -309,8 +408,46 @@ const App: React.FC = () => {
     return () => clearInterval(interval);
   }, [whatsAppEnabled]);
 
+  const getMonthKey = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  };
+
+  const getDueDateForMonth = (year: number, monthIndex: number, dueDay: number) => {
+    const lastDay = new Date(year, monthIndex + 1, 0).getDate();
+    const clampedDay = Math.min(Math.max(1, dueDay), lastDay);
+    return new Date(year, monthIndex, clampedDay, 9, 0, 0, 0);
+  };
+
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(amount);
+  };
+
+  const formatDateDisplay = (isoDate: string) => {
+    if (!isoDate) return '';
+    const [year, month, day] = isoDate.split('-').map(Number);
+    if (!year || !month || !day) return isoDate;
+    return `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}.${year}`;
+  };
+
+  const getNotificationNumbers = () => {
+    const primary = phoneNumber.trim();
+    const secondary = secondPhoneNumber.trim();
+    return Array.from(new Set([primary, secondary].filter(Boolean)));
+  };
+
+  const sendNotificationMessage = async (message: string) => {
+    const targets = getNotificationNumbers();
+    if (!targets.length) return;
+    for (const target of targets) {
+      await sendWhatsAppMessage(target, message);
+    }
+  };
+
   const activeCategory = useMemo(() => categories.find(c => c.id === activeCategoryId), [categories, activeCategoryId]);
   const currentUser = useMemo(() => users.find(u => u.id === currentUserId) || null, [users, currentUserId]);
+  const isAdmin = currentUser?.role === 'admin';
   const isAuditCategory = activeCategory?.name === 'Denetim';
   const visibleByUser = useMemo(() => {
     if (!currentUser) return [];
@@ -330,6 +467,57 @@ const App: React.FC = () => {
     [visibleByUser, activeCategoryId]
   );
   const visibleTasks = taskView === 'active' ? activeTasks : taskView === 'completed' ? completedTasks : expiredTasks;
+  const currentMonthKey = useMemo(() => getMonthKey(new Date(nowTs)), [nowTs]);
+  const rentalsWithStatus = useMemo(() => {
+    const nowDate = new Date(nowTs);
+    const year = nowDate.getFullYear();
+    const monthIndex = nowDate.getMonth();
+    return rentals.map(rental => {
+      const dueDate = getDueDateForMonth(year, monthIndex, rental.dueDay);
+      const isPaidForMonth = rental.paidMonth === currentMonthKey;
+      const overdueDays = !isPaidForMonth && nowTs > dueDate.getTime()
+        ? Math.floor((nowTs - dueDate.getTime()) / (24 * 60 * 60 * 1000))
+        : 0;
+      return { ...rental, isPaidForMonth, overdueDays, dueDate };
+    });
+  }, [rentals, nowTs, currentMonthKey]);
+  const filteredAssets = useMemo(() => {
+    const roomFilter = assetFilterRoom.trim().toLowerCase();
+    const textFilter = assetFilterText.trim().toLowerCase();
+    return assets.filter(item => {
+      const roomMatch = roomFilter ? item.room.toLowerCase().includes(roomFilter) : true;
+      const textMatch = textFilter
+        ? `${item.name} ${item.note}`.toLowerCase().includes(textFilter)
+        : true;
+      return roomMatch && textMatch;
+    });
+  }, [assets, assetFilterRoom, assetFilterText]);
+  const homeTasks = useMemo(() => {
+    let list = visibleByUser;
+    if (homeFilterStatus !== 'all') {
+      if (homeFilterStatus === 'active') {
+        list = list.filter(t => !t.isCompleted && !t.isExpired);
+      } else if (homeFilterStatus === 'completed') {
+        list = list.filter(t => t.isCompleted);
+      } else if (homeFilterStatus === 'expired') {
+        list = list.filter(t => t.isExpired);
+      }
+    }
+    if (homeFilterCategory !== 'all') {
+      list = list.filter(t => t.categoryId === homeFilterCategory);
+    }
+    if (homeFilterText.trim()) {
+      const q = homeFilterText.trim().toLowerCase();
+      list = list.filter(t => t.title.toLowerCase().includes(q));
+    }
+    return list;
+  }, [visibleByUser, homeFilterStatus, homeFilterCategory, homeFilterText]);
+  const homeStats = useMemo(() => {
+    const active = visibleByUser.filter(t => !t.isCompleted && !t.isExpired).length;
+    const completed = visibleByUser.filter(t => t.isCompleted).length;
+    const expired = visibleByUser.filter(t => t.isExpired).length;
+    return { active, completed, expired };
+  }, [visibleByUser]);
 
   const handleAddCategory = () => {
     if (!newCategoryName.trim()) return;
@@ -437,7 +625,8 @@ const App: React.FC = () => {
 
   const handlePhoneNumberSave = () => {
     localStorage.setItem('planla_phone_number', phoneNumber);
-    alert('Telefon numarası kaydedildi!');
+    localStorage.setItem('planla_phone_number_2', secondPhoneNumber);
+    alert('Telefon numaraları kaydedildi!');
   };
 
   const handleAddUser = () => {
@@ -687,10 +876,8 @@ const App: React.FC = () => {
     if (newCompletedState && (whatsAppEnabled || whatsAppReady)) {
       const category = categories.find(c => c.id === task.categoryId);
       const message = `✅ Görev Tamamlandı!\n\n📝 ${task.title}\n📁 Kategori: ${category?.name || 'Bilinmiyor'}\n⏰ ${new Date().toLocaleString('tr-TR')}`;
-      const targetNumber = phoneNumber.trim() || '05536789487';
-      
       try {
-        await sendWhatsAppMessage(targetNumber, message);
+        await sendNotificationMessage(message);
         console.log('WhatsApp mesajı gönderildi');
       } catch (error) {
         console.error('WhatsApp mesaj hatası:', error);
@@ -700,21 +887,112 @@ const App: React.FC = () => {
 
   const deleteTask = (taskId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    const task = tasks.find(t => t.id === taskId);
-    if (!task || task.createdByUserId !== currentUserId) {
-      alert('Sadece kendi eklediğin görevi silebilirsin.');
+    if (!isAdmin) {
+      alert('Görev silme yetkisi sadece admin\'dedir.');
       return;
     }
     setTasks(tasks.filter(t => t.id !== taskId));
   };
 
+  const handleAddRental = () => {
+    const unit = newRentalUnit.trim();
+    const name = newRentalName.trim();
+    const dueDay = Number(newRentalDueDay);
+    const amount = Number(newRentalAmount.replace(',', '.'));
+    if (!unit || !name || Number.isNaN(dueDay) || Number.isNaN(amount)) {
+      alert('Lütfen daire numarası, isim soyisim, kira günü ve tutarı girin.');
+      return;
+    }
+    if (dueDay < 1 || dueDay > 31 || amount <= 0) {
+      alert('Kira günü 1-31 arasında, tutar 0\'dan büyük olmalıdır.');
+      return;
+    }
+    const newRental: Rental = {
+      id: `rental-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      unitNumber: unit,
+      tenantName: name,
+      dueDay,
+      amount,
+      isPaid: false,
+      paidMonth: undefined,
+      lastReminderMonth: undefined,
+      createdAt: Date.now()
+    };
+    setRentals([newRental, ...rentals]);
+    setNewRentalUnit('');
+    setNewRentalName('');
+    setNewRentalDueDay('1');
+    setNewRentalAmount('');
+    setIsRentalModalOpen(false);
+    setActiveSection('rentals');
+  };
+
+  const toggleRentalPaid = (rentalId: string) => {
+    const monthKey = getMonthKey(new Date());
+    setRentals(prev => prev.map(rental => {
+      if (rental.id !== rentalId) return rental;
+      const isPaidForMonth = rental.paidMonth === monthKey;
+      if (isPaidForMonth) {
+        return { ...rental, isPaid: false, paidMonth: undefined };
+      }
+      return { ...rental, isPaid: true, paidMonth: monthKey, lastReminderMonth: undefined };
+    }));
+  };
+
+  const deleteRental = (rentalId: string) => {
+    if (currentUser?.role !== 'admin') {
+      alert('Sadece admin kiraları silebilir.');
+      return;
+    }
+    setRentals(prev => prev.filter(rental => rental.id !== rentalId));
+  };
+
+  const handleAddAsset = () => {
+    const name = newAssetName.trim();
+    const room = newAssetRoom.trim();
+    const assignedAt = newAssetDate.trim();
+    const note = newAssetNote.trim();
+    if (!name || !room || !assignedAt) {
+      alert('Lütfen ürün adı, oda ve veriliş tarihini girin.');
+      return;
+    }
+    const newItem: AssetItem = {
+      id: `asset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      room,
+      assignedAt,
+      note,
+      createdAt: Date.now()
+    };
+    setAssets([newItem, ...assets]);
+    setNewAssetName('');
+    setNewAssetRoom('');
+    setNewAssetDate('');
+    setNewAssetNote('');
+    setIsAssetModalOpen(false);
+    setActiveSection('assets');
+  };
+
+  const deleteAsset = (assetId: string) => {
+    if (currentUser?.role !== 'admin') {
+      alert('Sadece admin demirbaş silebilir.');
+      return;
+    }
+    setAssets(prev => prev.filter(item => item.id !== assetId));
+  };
+
   return (
-    <div className="min-h-screen flex flex-col md:flex-row bg-[#f8fafc] overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-full md:w-80 bg-white border-r border-slate-200 flex flex-col h-auto md:h-screen sticky top-0 z-30 shadow-sm">
+    <div className="min-h-screen app-gradient text-slate-900">
+      <div className="relative min-h-screen px-3 sm:px-6 lg:px-10 py-6 app-safe">
+        <div className="pointer-events-none absolute -top-24 -left-20 h-72 w-72 rounded-full bg-indigo-500/30 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-24 -right-10 h-80 w-80 rounded-full bg-fuchsia-500/20 blur-3xl" />
+        <div className="app-shell mx-auto max-w-6xl overflow-hidden">
+          <div className="min-h-[calc(100vh-3rem)] flex flex-col md:flex-row bg-[#f8fafc]/90 overflow-hidden">
+            {/* Sidebar */}
+            <aside className="w-full md:w-80 bg-white/85 backdrop-blur-xl border-r border-white/70 flex flex-col h-auto md:h-screen sticky top-0 z-30 shadow-2xl">
         <div className="p-8 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-100">
+            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-fuchsia-500 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200 float-slow">
                <SparklesIcon className="w-6 h-6 text-white" />
             </div>
             <div className="flex flex-col">
@@ -742,7 +1020,7 @@ const App: React.FC = () => {
           </div>
           <button 
             onClick={() => setIsWhatsAppModalOpen(true)}
-            className={`p-2.5 rounded-xl transition-all ${whatsAppReady ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
+            className={`p-2.5 rounded-xl transition-all ${whatsAppReady ? 'bg-emerald-100 text-emerald-600 shadow-lg shadow-emerald-100' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
             title="WhatsApp Ayarları"
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -751,16 +1029,30 @@ const App: React.FC = () => {
           </button>
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-4 py-4 space-y-1.5 custom-scrollbar">
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-4 mb-4">GÖREV KATEGORİLERİ</p>
+        <nav className="hidden md:flex md:flex-col flex-1 overflow-y-auto px-4 py-4 space-y-1.5 custom-scrollbar">
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-4 mb-4">MENÜ</p>
+          <div
+            onClick={() => setActiveSection('home')}
+            className={`flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
+              activeSection === 'home' ? 'bg-slate-900 text-white shadow-2xl translate-x-1' : 'hover:bg-white/70 text-slate-600'
+            }`}
+          >
+            <div className="flex items-center gap-4">
+              <span className="text-2xl">✨</span>
+              <span className="font-bold tracking-tight">Anasayfa</span>
+            </div>
+          </div>
           {categories.map((cat) => (
             <div 
               key={cat.id}
-              onClick={() => setActiveCategoryId(cat.id)}
+              onClick={() => {
+                setActiveSection('tasks');
+                setActiveCategoryId(cat.id);
+              }}
               className={`group flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
-                activeCategoryId === cat.id 
-                ? `${cat.color} text-white shadow-xl translate-x-1` 
-                : 'hover:bg-slate-50 text-slate-600'
+                activeSection === 'tasks' && activeCategoryId === cat.id 
+                ? `${cat.color} text-white shadow-2xl translate-x-1` 
+                : 'hover:bg-white/70 text-slate-600'
               }`}
             >
               <div className="flex items-center gap-4">
@@ -777,20 +1069,171 @@ const App: React.FC = () => {
           ))}
           <button 
             onClick={() => setIsCategoryModalOpen(true)}
-            className="w-full mt-6 py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 hover:border-indigo-500 hover:text-indigo-500 transition-all flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest bg-slate-50/50 hover:bg-indigo-50/30"
+            className="w-full mt-6 py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 hover:border-indigo-500 hover:text-indigo-500 transition-all flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest bg-white/70 hover:bg-indigo-50/60"
           >
             <PlusIcon className="w-4 h-4" /> Yeni Kategori
           </button>
+          <div
+            onClick={() => setActiveSection('rentals')}
+            className={`mt-6 flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
+              activeSection === 'rentals' ? 'bg-emerald-500 text-white shadow-2xl translate-x-1' : 'hover:bg-white/70 text-slate-600'
+            }`}
+          >
+            <div className="flex items-center gap-4">
+              <span className="text-2xl">🏠</span>
+              <span className="font-bold tracking-tight">Kiralar</span>
+            </div>
+          </div>
+          <div
+            onClick={() => setActiveSection('assets')}
+            className={`mt-3 flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
+              activeSection === 'assets' ? 'bg-sky-500 text-white shadow-2xl translate-x-1' : 'hover:bg-white/70 text-slate-600'
+            }`}
+          >
+            <div className="flex items-center gap-4">
+              <span className="text-2xl">🧰</span>
+              <span className="font-bold tracking-tight">Demirbaşlar</span>
+            </div>
+          </div>
         </nav>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 p-6 md:p-12 overflow-y-auto custom-scrollbar">
-        {activeCategory ? (
+      <main className="flex-1 p-6 pb-32 md:pb-12 md:p-12 overflow-y-auto custom-scrollbar">
+        {activeSection === 'home' ? (
           <div className="max-w-4xl mx-auto space-y-10">
-            <header className="flex flex-col md:flex-row md:items-center justify-between gap-8 bg-white p-10 rounded-[3rem] shadow-sm border border-slate-100">
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-8 bg-gradient-to-br from-white via-white to-slate-50/80 p-10 rounded-[3rem] shadow-2xl border border-white/70">
               <div className="flex items-center gap-8">
-                <div className={`text-6xl p-8 rounded-[2.5rem] ${activeCategory.color} text-white shadow-2xl shadow-slate-200 transform -rotate-2`}>
+                <div className="text-6xl p-8 rounded-[2.5rem] bg-slate-900 text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow">
+                  ✨
+                </div>
+                <div>
+                  <h2 className="text-5xl font-black text-slate-800 tracking-tighter">Anasayfa</h2>
+                  <div className="flex items-center gap-2 mt-2">
+                    <div className="w-2 h-2 rounded-full bg-slate-900 animate-pulse" />
+                    <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                      {homeStats.active} aktif · {homeStats.completed} tamamlanan · {homeStats.expired} geciken
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setHomeFilterStatus('active')}
+                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                    homeFilterStatus === 'active' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'
+                  }`}
+                >
+                  Aktif
+                </button>
+                <button
+                  onClick={() => setHomeFilterStatus('completed')}
+                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                    homeFilterStatus === 'completed' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'
+                  }`}
+                >
+                  Tamamlanan
+                </button>
+                <button
+                  onClick={() => setHomeFilterStatus('expired')}
+                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                    homeFilterStatus === 'expired' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'
+                  }`}
+                >
+                  Geciken
+                </button>
+                <button
+                  onClick={() => setHomeFilterStatus('all')}
+                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                    homeFilterStatus === 'all' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'
+                  }`}
+                >
+                  Tümü
+                </button>
+              </div>
+            </header>
+
+            <div className="bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg p-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Kategori</label>
+                  <select
+                    value={homeFilterCategory}
+                    onChange={(e) => setHomeFilterCategory(e.target.value)}
+                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-slate-500/10 focus:border-slate-700 font-bold text-slate-600"
+                  >
+                    <option value="all">Tümü</option>
+                    {categories.map(cat => (
+                      <option key={cat.id} value={cat.id}>{cat.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Arama</label>
+                  <input
+                    type="text"
+                    value={homeFilterText}
+                    onChange={(e) => setHomeFilterText(e.target.value)}
+                    placeholder="Görev adıyla ara"
+                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-slate-500/10 focus:border-slate-700 font-bold text-slate-600"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {homeTasks.map(task => {
+                const category = categories.find(c => c.id === task.categoryId);
+                const statusLabel = task.isExpired ? 'Geciken' : task.isCompleted ? 'Tamamlandı' : 'Aktif';
+                return (
+                  <div
+                    key={task.id}
+                    className={`group flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg transition-all duration-300 ${
+                      task.isExpired ? 'ring-2 ring-rose-300/60' : task.isCompleted ? 'opacity-60' : 'hover:shadow-2xl hover:border-slate-200 hover:-translate-y-1'
+                    }`}
+                  >
+                    <div className="flex items-center gap-6">
+                      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${category?.color || 'bg-slate-400'} text-white`}>
+                        {category?.icon || '📌'}
+                      </div>
+                      <div>
+                        <div className="text-2xl font-black text-slate-800 tracking-tight">
+                          {task.title}
+                        </div>
+                        <div className="text-sm font-bold text-slate-500">
+                          {category?.name || 'Kategori Yok'}
+                        </div>
+                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-2">
+                          Durum: {statusLabel}
+                        </div>
+                        {task.dueAt && !task.isCompleted && !task.isExpired && (
+                          <div className="text-xs font-black uppercase tracking-widest text-amber-500 mt-2">
+                            Kalan: {formatRemaining(task.dueAt - nowTs)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {homeTasks.length === 0 && (
+                <div className="text-center py-44 bg-white/70 rounded-[4rem] border-2 border-dashed border-white/70 shadow-xl">
+                  <div className="text-8xl mb-8 opacity-40">✨</div>
+                  <h3 className="text-3xl font-black text-slate-400 tracking-tighter">BUGÜN İŞ YOK</h3>
+                  <p className="text-slate-400 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                    Filtreyi değiştirerek diğer görevleri görebilirsin.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : activeSection === 'tasks' ? (
+          activeCategory ? (
+            <div className="max-w-4xl mx-auto space-y-10">
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-8 bg-gradient-to-br from-white via-white to-indigo-50/80 p-10 rounded-[3rem] shadow-2xl border border-white/70">
+              <div className="flex items-center gap-8">
+                <div className={`text-6xl p-8 rounded-[2.5rem] ${activeCategory.color} text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow`}>
                     {activeCategory.icon}
                 </div>
                 <div>
@@ -806,26 +1249,26 @@ const App: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setTaskView('active')}
-                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${taskView === 'active' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${taskView === 'active' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'}`}
                 >
                   Aktif
                 </button>
                 <button
                   onClick={() => setTaskView('completed')}
-                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${taskView === 'completed' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${taskView === 'completed' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'}`}
                 >
                   Tamamlanan
                 </button>
                 <button
                   onClick={() => setTaskView('expired')}
-                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${taskView === 'expired' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${taskView === 'expired' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'}`}
                 >
                   Yapılmayan
                 </button>
               </div>
               <button 
                 onClick={() => { setIsTaskModalOpen(true); setAiSuggestions([]); setSelectedAuditOptions([]); }}
-                className="group flex items-center gap-4 px-10 py-6 bg-slate-900 text-white rounded-[2rem] font-black shadow-2xl hover:bg-slate-800 transition-all active:scale-95 shadow-slate-200"
+                className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-indigo-600 via-fuchsia-600 to-pink-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-90 transition-all active:scale-95 shadow-indigo-300"
               >
                 <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" /> 
                 GÖREV EKLE
@@ -846,7 +1289,7 @@ const App: React.FC = () => {
                       }
                     }
                   }}
-                  className={`group flex items-center justify-between p-8 bg-white rounded-[2.5rem] border border-transparent shadow-sm transition-all duration-300 ${task.isCompleted ? 'opacity-30 grayscale' : 'hover:shadow-xl hover:border-indigo-100 hover:-translate-y-1'}`}
+                  className={`group flex items-center justify-between p-8 bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg transition-all duration-300 ${task.isCompleted ? 'opacity-30 grayscale' : 'hover:shadow-2xl hover:border-indigo-200 hover:-translate-y-1.5'}`}
                 >
                   <div className="flex items-center gap-8 flex-1">
                     <button 
@@ -917,15 +1360,15 @@ const App: React.FC = () => {
                   )}
                   <button 
                     onClick={(e) => { e.stopPropagation(); deleteTask(task.id, e); }}
-                    disabled={task.createdByUserId !== currentUserId}
-                    className={`p-3 rounded-2xl transition-all opacity-0 group-hover:opacity-100 ${task.createdByUserId !== currentUserId ? 'text-slate-200 cursor-not-allowed' : 'text-slate-200 hover:text-rose-500 hover:bg-rose-50'}`}
+                    disabled={!isAdmin}
+                    className={`p-3 rounded-2xl transition-all opacity-0 group-hover:opacity-100 ${!isAdmin ? 'text-slate-200 cursor-not-allowed' : 'text-slate-200 hover:text-rose-500 hover:bg-rose-50'}`}
                   >
                     <TrashIcon className="w-6 h-6" />
                   </button>
                 </div>
               ))}
               {visibleTasks.length === 0 && (
-                <div className="text-center py-44 bg-white/40 rounded-[4rem] border-2 border-dashed border-slate-200">
+                <div className="text-center py-44 bg-white/70 rounded-[4rem] border-2 border-dashed border-white/70 shadow-xl">
                   <div className="text-8xl mb-8 opacity-40">✨</div>
                   <h3 className="text-3xl font-black text-slate-400 tracking-tighter">
                     {taskView === 'active' ? 'HER ŞEY YOLUNDA!' : taskView === 'completed' ? 'TAMAMLANAN YOK' : 'YAPILMAYAN YOK'}
@@ -936,16 +1379,292 @@ const App: React.FC = () => {
                 </div>
               )}
             </div>
+            </div>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center text-slate-300">
+              <div className="w-32 h-32 bg-slate-100 rounded-[3rem] flex items-center justify-center mb-8">
+                <PlusIcon className="w-12 h-12" />
+              </div>
+              <p className="text-2xl font-black uppercase tracking-widest opacity-40">Bir Kategori Seçin</p>
+            </div>
+          )
+        ) : activeSection === 'rentals' ? (
+          <div className="max-w-4xl mx-auto space-y-10">
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-8 bg-gradient-to-br from-white via-white to-emerald-50/80 p-10 rounded-[3rem] shadow-2xl border border-white/70">
+              <div className="flex items-center gap-8">
+                <div className="text-6xl p-8 rounded-[2.5rem] bg-emerald-500 text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow">
+                  🏠
+                </div>
+                <div>
+                  <h2 className="text-5xl font-black text-slate-800 tracking-tighter">Kiralar</h2>
+                  <div className="flex items-center gap-2 mt-2">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                      {rentalsWithStatus.length} kayıt
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsRentalModalOpen(true)}
+                className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-90 transition-all active:scale-95 shadow-emerald-300"
+              >
+                <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
+                KİRA EKLE
+              </button>
+            </header>
+
+            <div className="space-y-4">
+              {rentalsWithStatus.map(rental => {
+                const isOverdue = rental.overdueDays >= 3 && !rental.isPaidForMonth;
+                return (
+                  <div
+                    key={rental.id}
+                    className={`group flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg transition-all duration-300 ${
+                      isOverdue ? 'ring-2 ring-rose-300/60' : 'hover:shadow-2xl hover:border-emerald-200 hover:-translate-y-1'
+                    }`}
+                  >
+                    <div className="flex items-center gap-6">
+                      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${
+                        rental.isPaidForMonth ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'
+                      }`}>
+                        {rental.isPaidForMonth ? '✅' : '⏳'}
+                      </div>
+                      <div>
+                        <div className="text-2xl font-black text-slate-800 tracking-tight">
+                          Daire {rental.unitNumber}
+                        </div>
+                        <div className="text-sm font-bold text-slate-500">
+                          {rental.tenantName}
+                        </div>
+                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-2">
+                          Kira günü: {rental.dueDay} · Tutar: {formatCurrency(rental.amount)}
+                        </div>
+                        {isOverdue && (
+                          <div className="text-xs font-black uppercase tracking-widest text-rose-500 mt-2">
+                            {rental.overdueDays} gün gecikmede
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => toggleRentalPaid(rental.id)}
+                        className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
+                          rental.isPaidForMonth
+                            ? 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            : 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-200'
+                        }`}
+                      >
+                        {rental.isPaidForMonth ? 'Ödeme İptal' : 'Ödendi'}
+                      </button>
+                      <button
+                        onClick={() => deleteRental(rental.id)}
+                        className="p-3 rounded-2xl text-slate-300 hover:text-rose-500 hover:bg-rose-50 transition-all"
+                        title="Sil"
+                      >
+                        <TrashIcon className="w-6 h-6" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {rentalsWithStatus.length === 0 && (
+                <div className="text-center py-44 bg-white/70 rounded-[4rem] border-2 border-dashed border-white/70 shadow-xl">
+                  <div className="text-8xl mb-8 opacity-40">🏠</div>
+                  <h3 className="text-3xl font-black text-slate-400 tracking-tighter">KİRA KAYDI YOK</h3>
+                  <p className="text-slate-400 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                    İlk kira kaydını ekleyin.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         ) : (
-          <div className="h-full flex flex-col items-center justify-center text-slate-300">
-             <div className="w-32 h-32 bg-slate-100 rounded-[3rem] flex items-center justify-center mb-8">
-                <PlusIcon className="w-12 h-12" />
-             </div>
-             <p className="text-2xl font-black uppercase tracking-widest opacity-40">Bir Kategori Seçin</p>
+          <div className="max-w-4xl mx-auto space-y-10">
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-8 bg-gradient-to-br from-white via-white to-sky-50/80 p-10 rounded-[3rem] shadow-2xl border border-white/70">
+              <div className="flex items-center gap-8">
+                <div className="text-6xl p-8 rounded-[2.5rem] bg-sky-500 text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow">
+                  🧰
+                </div>
+                <div>
+                  <h2 className="text-5xl font-black text-slate-800 tracking-tighter">Demirbaşlar</h2>
+                  <div className="flex items-center gap-2 mt-2">
+                    <div className="w-2 h-2 rounded-full bg-sky-500 animate-pulse" />
+                    <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                      {filteredAssets.length} kayıt
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsAssetModalOpen(true)}
+                className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-sky-500 via-blue-500 to-indigo-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-90 transition-all active:scale-95 shadow-sky-300"
+              >
+                <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
+                DEMİRBAŞ EKLE
+              </button>
+            </header>
+
+            <div className="bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg p-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Oda Filtresi</label>
+                  <input
+                    type="text"
+                    value={assetFilterRoom}
+                    onChange={(e) => setAssetFilterRoom(e.target.value)}
+                    placeholder="Örn: Salon"
+                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Arama</label>
+                  <input
+                    type="text"
+                    value={assetFilterText}
+                    onChange={(e) => setAssetFilterText(e.target.value)}
+                    placeholder="Ürün adı veya açıklama"
+                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {filteredAssets.map(item => (
+                <div
+                  key={item.id}
+                  className="group flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg transition-all duration-300 hover:shadow-2xl hover:border-sky-200 hover:-translate-y-1"
+                >
+                  <div className="flex items-center gap-6">
+                    <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl bg-sky-100 text-sky-600">
+                      📦
+                    </div>
+                    <div>
+                      <div className="text-2xl font-black text-slate-800 tracking-tight">
+                        {item.name}
+                      </div>
+                      <div className="text-sm font-bold text-slate-500">
+                        Oda: {item.room}
+                      </div>
+                      <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-2">
+                        Veriliş: {formatDateDisplay(item.assignedAt)}
+                      </div>
+                      {item.note && (
+                        <div className="text-xs font-black text-slate-500 uppercase tracking-widest mt-2">
+                          {item.note}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => deleteAsset(item.id)}
+                    className="p-3 rounded-2xl text-slate-300 hover:text-rose-500 hover:bg-rose-50 transition-all"
+                    title="Sil"
+                  >
+                    <TrashIcon className="w-6 h-6" />
+                  </button>
+                </div>
+              ))}
+
+              {filteredAssets.length === 0 && (
+                <div className="text-center py-44 bg-white/70 rounded-[4rem] border-2 border-dashed border-white/70 shadow-xl">
+                  <div className="text-8xl mb-8 opacity-40">🧰</div>
+                  <h3 className="text-3xl font-black text-slate-400 tracking-tighter">DEMİRBAŞ YOK</h3>
+                  <p className="text-slate-400 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                    İlk demirbaş kaydını ekleyin.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </main>
+
+      {/* Mobile Category Bar */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 px-4 pb-4">
+        <div className="bg-white/80 backdrop-blur-xl border border-white/70 shadow-2xl rounded-[2rem] p-3">
+          <div className="flex items-center gap-2 overflow-x-auto custom-scrollbar">
+            <button
+              onClick={() => setActiveSection('home')}
+              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${
+                activeSection === 'home'
+                  ? 'bg-slate-900 text-white shadow-lg'
+                  : 'bg-white/70 text-slate-700 border border-white/70 shadow-md'
+              }`}
+            >
+              ✨ Anasayfa
+            </button>
+            <button
+              onClick={() => setIsCategoryModalOpen(true)}
+              className="shrink-0 px-4 py-3 rounded-full bg-gradient-to-r from-indigo-600 to-fuchsia-500 text-white text-[10px] font-black uppercase tracking-widest shadow-lg"
+            >
+              + Kategori
+            </button>
+            {categories.map((cat) => {
+              const isActive = activeSection === 'tasks' && cat.id === activeCategoryId;
+              return (
+                <button
+                  key={cat.id}
+                  onClick={() => {
+                    setActiveSection('tasks');
+                    setActiveCategoryId(cat.id);
+                  }}
+                  className={`shrink-0 flex items-center gap-2 px-4 py-3 rounded-full border transition-all ${
+                    isActive
+                      ? 'bg-slate-900 text-white border-slate-900 shadow-lg'
+                      : 'bg-white/70 text-slate-700 border-white/70 shadow-md'
+                  }`}
+                >
+                  <span className="text-lg leading-none">{cat.icon}</span>
+                  <span className="text-xs font-black uppercase tracking-widest">{cat.name}</span>
+                </button>
+              );
+            })}
+            <button
+              onClick={() => setActiveSection('rentals')}
+              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${
+                activeSection === 'rentals'
+                  ? 'bg-emerald-500 text-white shadow-lg'
+                  : 'bg-white/70 text-slate-700 border border-white/70 shadow-md'
+              }`}
+            >
+              🏠 Kiralar
+            </button>
+            <button
+              onClick={() => setActiveSection('assets')}
+              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${
+                activeSection === 'assets'
+                  ? 'bg-sky-500 text-white shadow-lg'
+                  : 'bg-white/70 text-slate-700 border border-white/70 shadow-md'
+              }`}
+            >
+              🧰 Demirbaşlar
+            </button>
+            {activeSection === 'rentals' && (
+              <button
+                onClick={() => setIsRentalModalOpen(true)}
+                className="shrink-0 px-4 py-3 rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500 text-white text-[10px] font-black uppercase tracking-widest shadow-lg"
+              >
+                + Kira
+              </button>
+            )}
+            {activeSection === 'assets' && (
+              <button
+                onClick={() => setIsAssetModalOpen(true)}
+                className="shrink-0 px-4 py-3 rounded-full bg-gradient-to-r from-sky-500 to-blue-500 text-white text-[10px] font-black uppercase tracking-widest shadow-lg"
+              >
+                + Demirbaş
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+          </div>
+        </div>
+      </div>
 
       {/* Category Create Modal */}
       {isCategoryModalOpen && (
@@ -996,6 +1715,137 @@ const App: React.FC = () => {
               <div className="flex gap-6 pt-6">
                 <button onClick={() => setIsCategoryModalOpen(false)} className="flex-1 py-6 font-black text-slate-400 hover:text-slate-600 transition-colors uppercase text-[10px] tracking-widest">Vazgeç</button>
                 <button onClick={handleAddCategory} className="flex-[2] py-6 bg-indigo-600 text-white rounded-[2rem] font-black shadow-2xl hover:bg-indigo-700 active:scale-95 transition-all uppercase text-[10px] tracking-widest">Kategori Oluştur</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rental Create Modal */}
+      {isRentalModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
+          <div className="bg-white rounded-[3.5rem] w-full max-w-md p-12 animate-in zoom-in-95 shadow-2xl">
+            <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">Yeni Kira</h3>
+            <div className="space-y-8">
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Daire Numarası</label>
+                <input
+                  type="text"
+                  value={newRentalUnit}
+                  onChange={(e) => setNewRentalUnit(e.target.value)}
+                  placeholder="Örn: 5B"
+                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">İsim Soyisim</label>
+                <input
+                  type="text"
+                  value={newRentalName}
+                  onChange={(e) => setNewRentalName(e.target.value)}
+                  placeholder="Örn: Ahmet Yılmaz"
+                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-6">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Kira Günü</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="31"
+                    value={newRentalDueDay}
+                    onChange={(e) => setNewRentalDueDay(e.target.value)}
+                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Kira Tutarı</label>
+                  <input
+                    type="text"
+                    value={newRentalAmount}
+                    onChange={(e) => setNewRentalAmount(e.target.value)}
+                    placeholder="Örn: 9500"
+                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-6 pt-2">
+                <button
+                  onClick={() => setIsRentalModalOpen(false)}
+                  className="flex-1 py-5 font-black text-slate-400 hover:text-slate-600 transition-colors uppercase text-[10px] tracking-widest"
+                >
+                  Vazgeç
+                </button>
+                <button
+                  onClick={handleAddRental}
+                  className="flex-[2] py-5 bg-emerald-500 text-white rounded-[2rem] font-black shadow-2xl hover:bg-emerald-600 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
+                >
+                  Kira Kaydet
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Asset Create Modal */}
+      {isAssetModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
+          <div className="bg-white rounded-[3.5rem] w-full max-w-md p-12 animate-in zoom-in-95 shadow-2xl">
+            <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">Yeni Demirbaş</h3>
+            <div className="space-y-8">
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Ürün Adı</label>
+                <input
+                  type="text"
+                  value={newAssetName}
+                  onChange={(e) => setNewAssetName(e.target.value)}
+                  placeholder="Örn: Televizyon"
+                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Hangi Oda</label>
+                <input
+                  type="text"
+                  value={newAssetRoom}
+                  onChange={(e) => setNewAssetRoom(e.target.value)}
+                  placeholder="Örn: Salon"
+                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Ne Zaman Verildi</label>
+                <input
+                  type="date"
+                  value={newAssetDate}
+                  onChange={(e) => setNewAssetDate(e.target.value)}
+                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Açıklama</label>
+                <textarea
+                  value={newAssetNote}
+                  onChange={(e) => setNewAssetNote(e.target.value)}
+                  placeholder="Ek notlar..."
+                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600 min-h-[120px]"
+                />
+              </div>
+              <div className="flex gap-6 pt-2">
+                <button
+                  onClick={() => setIsAssetModalOpen(false)}
+                  className="flex-1 py-5 font-black text-slate-400 hover:text-slate-600 transition-colors uppercase text-[10px] tracking-widest"
+                >
+                  Vazgeç
+                </button>
+                <button
+                  onClick={handleAddAsset}
+                  className="flex-[2] py-5 bg-sky-500 text-white rounded-[2rem] font-black shadow-2xl hover:bg-sky-600 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
+                >
+                  Demirbaş Kaydet
+                </button>
               </div>
             </div>
           </div>
@@ -1297,28 +2147,35 @@ const App: React.FC = () => {
             </div>
 
             <div className="space-y-8">
-              {/* Telefon Numarası */}
-              <div>
+              {/* Telefon Numaraları */}
+              <div className="space-y-4">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">
-                  Bildirim Gönderilecek Numara
+                  Bildirim Gönderilecek Numaralar
                 </label>
-                <div className="flex gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <input 
                     type="text" 
                     value={phoneNumber}
                     onChange={(e) => setPhoneNumber(e.target.value)}
-                    placeholder="05536789487"
-                    className="flex-1 p-6 bg-slate-50 border border-slate-100 rounded-[2rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-xl transition-all shadow-inner"
+                    placeholder="Ana numara"
+                    className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-xl transition-all shadow-inner"
                   />
-                  <button
-                    onClick={handlePhoneNumberSave}
-                    className="px-8 py-6 bg-indigo-600 text-white rounded-[2rem] font-black hover:bg-indigo-700 active:scale-95 transition-all shadow-lg text-sm"
-                  >
-                    Kaydet
-                  </button>
+                  <input 
+                    type="text" 
+                    value={secondPhoneNumber}
+                    onChange={(e) => setSecondPhoneNumber(e.target.value)}
+                    placeholder="2. numara (opsiyonel)"
+                    className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-xl transition-all shadow-inner"
+                  />
                 </div>
+                <button
+                  onClick={handlePhoneNumberSave}
+                  className="px-8 py-6 bg-indigo-600 text-white rounded-[2rem] font-black hover:bg-indigo-700 active:scale-95 transition-all shadow-lg text-sm"
+                >
+                  Kaydet
+                </button>
                 <p className="text-xs text-slate-400 mt-3 px-2">
-                  📱 Tamamlanan görevler bu numaraya bildirim olarak gönderilecek
+                  📱 Tamamlanan görevler bu numaralara bildirim olarak gönderilecek
                 </p>
               </div>
 
@@ -1645,9 +2502,8 @@ const App: React.FC = () => {
                   if (whatsAppEnabled || whatsAppReady) {
                     const category = categories.find(c => c.id === task.categoryId);
                     const message = `✅ Görev Tamamlandı!\n\n📝 ${task.title}\n📁 Kategori: ${category?.name || 'Bilinmiyor'}\n⏰ ${new Date().toLocaleString('tr-TR')}`;
-                    const targetNumber = phoneNumber.trim() || '05536789487';
                     try {
-                      await sendWhatsAppMessage(targetNumber, message);
+                      await sendNotificationMessage(message);
                     } catch (error) {
                       console.error('WhatsApp mesaj hatası:', error);
                     }

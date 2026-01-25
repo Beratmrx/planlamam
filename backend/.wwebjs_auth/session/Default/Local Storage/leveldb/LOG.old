@@ -1,3 +1,6 @@
-2026/01/23-14:29:48.425 25c0 Reusing MANIFEST C:\Users\fatih\OneDrive\Desktop\yapılacaklar\backend\.wwebjs_auth\session\Default\Local Storage\leveldb/MANIFEST-000001
-2026/01/23-14:29:48.515 25c0 Recovering log #3
-2026/01/23-14:29:48.549 25c0 Reusing old log C:\Users\fatih\OneDrive\Desktop\yapılacaklar\backend\.wwebjs_auth\session\Default\Local Storage\leveldb/000003.log 
+2026/01/25-10:04:15.205 3498 Reusing MANIFEST C:\Users\fatih\OneDrive\Desktop\yapılacaklar\backend\.wwebjs_auth\session\Default\Local Storage\leveldb/MANIFEST-000001
+2026/01/25-10:04:15.285 3498 Recovering log #3
+2026/01/25-10:04:15.323 3498 Reusing old log C:\Users\fatih\OneDrive\Desktop\yapılacaklar\backend\.wwebjs_auth\session\Default\Local Storage\leveldb/000003.log 
+2026/01/25-10:05:15.350 3498 Level-0 table #5: started
+2026/01/25-10:05:15.365 3498 Level-0 table #5: 17778 bytes OK
+2026/01/25-10:05:15.372 3498 Delete type=0 #3

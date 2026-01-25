@@ -3,6 +3,7 @@ import cors from 'cors';
 import qrcode from 'qrcode';
 import qrTerminal from 'qrcode-terminal';
 import pkg from 'whatsapp-web.js';
+import fs from 'fs';
 const { Client, LocalAuth } = pkg;
 
 const app = express();
@@ -32,6 +33,26 @@ const patchSendSeen = async () => {
 };
 
 // WhatsApp Client Başlatma
+const resolveChromiumPath = () => {
+  const candidates = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable'
+  ].filter(Boolean);
+
+  const found = candidates.find(path => fs.existsSync(path));
+  if (found) {
+    console.log(`🧭 Chromium bulundu: ${found}`);
+  } else {
+    console.warn('⚠️ Chromium bulunamadı. PUPPETEER_EXECUTABLE_PATH kontrol edin.');
+  }
+  return found;
+};
+
+const chromiumPath = resolveChromiumPath();
+
 const initializeWhatsApp = () => {
   console.log('🚀 WhatsApp Client başlatılıyor...');
   
@@ -39,6 +60,7 @@ const initializeWhatsApp = () => {
     authStrategy: new LocalAuth(),
     puppeteer: {
       headless: true,
+      executablePath: chromiumPath,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',

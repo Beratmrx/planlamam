@@ -1,10 +1,12 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Task, Category, User, Rental, AssetItem } from './types';
 import { DEFAULT_CATEGORIES, CATEGORY_COLORS, CATEGORY_ICONS } from './constants';
 import { PlusIcon, TrashIcon, SparklesIcon, CheckIcon } from './components/Icons';
 import { getSmartSuggestions } from './services/geminiService';
 import { initializeWhatsApp, getWhatsAppStatus, sendWhatsAppMessage } from './services/whatsappService';
+
+const BACKEND_URL = (import.meta as any).env?.VITE_BACKEND_URL || 'http://localhost:3001';
 
 const App: React.FC = () => {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -76,27 +78,70 @@ const App: React.FC = () => {
   const [whatsAppEnabled, setWhatsAppEnabled] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('05536789487');
   const [secondPhoneNumber, setSecondPhoneNumber] = useState('');
+  const [whatsAppInitRequested, setWhatsAppInitRequested] = useState(false);
 
-  useEffect(() => {
+  const saveTimerRef = useRef<number | null>(null);
+  const defaultPhoneNumber = '05536789487';
+  const defaultAdmin: User = {
+    id: 'user-admin',
+    name: 'Admin',
+    username: 'admin',
+    password: 'admin123',
+    role: 'admin',
+    phoneNumber: defaultPhoneNumber
+  };
+
+  const normalizeUsers = (inputUsers: User[]) => {
+    const baseUsers = inputUsers.length ? inputUsers : [defaultAdmin];
+    return baseUsers.map(user => {
+      const username = user.username || user.name.toLowerCase().replace(/\s+/g, '');
+      let password = user.password || '1234';
+      if (user.role === 'admin') {
+        password = user.password && user.password !== '1234' ? user.password : 'admin123';
+      }
+      return {
+        ...user,
+        username: user.role === 'admin' ? 'admin' : username,
+        password
+      };
+    });
+  };
+
+  const resolveCurrentUserId = (usersList: User[], desiredId?: string | null) => {
+    if (desiredId && usersList.some(u => u.id === desiredId)) return desiredId;
+    return usersList[0]?.id || defaultAdmin.id;
+  };
+
+  const normalizeTasks = (taskList: Task[], fallbackUserId: string) => {
+    return taskList.map(task => ({
+      ...task,
+      createdByUserId: task.createdByUserId || fallbackUserId,
+      assignedToUserId: task.assignedToUserId || fallbackUserId,
+      expectedDuration: task.expectedDuration || '01:00',
+      expectedDurationMinutes: task.expectedDurationMinutes,
+      dueAt: task.dueAt,
+      repeat: task.repeat || 'once',
+      lastCompletedDate: task.lastCompletedDate,
+      remindersSentMinutes: task.remindersSentMinutes || [],
+      auditItems: task.auditItems || [],
+      auditResults: task.auditResults || [],
+      requiresPhoto: task.requiresPhoto ?? false,
+      completionPhotoDataUrl: task.completionPhotoDataUrl,
+      isExpired: task.isExpired || false
+    }));
+  };
+
+  const buildLocalData = () => {
     const savedUsers = localStorage.getItem('planla_users_v1');
     const savedCurrentUserId = localStorage.getItem('planla_current_user_id');
     const savedCategories = localStorage.getItem('planla_categories_v3');
     const savedTasks = localStorage.getItem('planla_tasks_v3');
     const savedWhatsAppEnabled = localStorage.getItem('planla_whatsapp_enabled');
     const savedPhoneNumber = localStorage.getItem('planla_phone_number');
+    const savedSecondPhoneNumber = localStorage.getItem('planla_phone_number_2');
     const savedAuditOptions = localStorage.getItem('planla_audit_options_v1');
     const savedRentals = localStorage.getItem('planla_rentals_v1');
     const savedAssets = localStorage.getItem('planla_assets_v1');
-    const savedSecondPhoneNumber = localStorage.getItem('planla_phone_number_2');
-
-    const defaultAdmin: User = {
-      id: 'user-admin',
-      name: 'Admin',
-      username: 'admin',
-      password: 'admin123',
-      role: 'admin',
-      phoneNumber: '05536789487'
-    };
 
     let initialUsers: User[] = [];
     if (savedUsers) {
@@ -109,91 +154,103 @@ const App: React.FC = () => {
       initialUsers = [defaultAdmin];
     }
 
-    let initialCurrentUserId = initialUsers[0]?.id || defaultAdmin.id;
-    if (savedCurrentUserId && initialUsers.some(u => u.id === savedCurrentUserId)) {
-      initialCurrentUserId = savedCurrentUserId;
-    }
+    const normalizedUsers = normalizeUsers(initialUsers);
+    const currentUserId = resolveCurrentUserId(normalizedUsers, savedCurrentUserId);
+    const categories = savedCategories ? JSON.parse(savedCategories) : DEFAULT_CATEGORIES;
+    const activeCategoryId = categories.length ? categories[0].id : null;
+    const tasks = savedTasks ? normalizeTasks(JSON.parse(savedTasks), currentUserId) : [];
+    const whatsAppEnabled = savedWhatsAppEnabled ? JSON.parse(savedWhatsAppEnabled) : false;
+    const phoneNumber = savedPhoneNumber || defaultPhoneNumber;
+    const secondPhoneNumber = savedSecondPhoneNumber || '';
+    const auditOptions = savedAuditOptions ? JSON.parse(savedAuditOptions) : [];
+    const rentals = savedRentals ? JSON.parse(savedRentals) : [];
+    const assets = savedAssets ? JSON.parse(savedAssets) : [];
 
-    const normalizedUsers = initialUsers.map(user => {
-      const username = user.username || user.name.toLowerCase().replace(/\s+/g, '');
-      let password = user.password || '1234';
-      if (user.role === 'admin') {
-        password = user.password && user.password !== '1234' ? user.password : 'admin123';
-      }
-      return {
-        ...user,
-        username: user.role === 'admin' ? 'admin' : username,
-        password
-      };
-    });
+    return {
+      users: normalizedUsers,
+      currentUserId,
+      categories,
+      activeCategoryId,
+      tasks,
+      whatsAppEnabled,
+      phoneNumber,
+      secondPhoneNumber,
+      auditOptions: Array.isArray(auditOptions) ? auditOptions : [],
+      rentals: Array.isArray(rentals) ? rentals : [],
+      assets: Array.isArray(assets) ? assets : [],
+      activeSection: 'home'
+    };
+  };
+
+  const applyHydratedState = (data: any) => {
+    const normalizedUsers = normalizeUsers(Array.isArray(data?.users) ? data.users : []);
+    const currentUserId = resolveCurrentUserId(normalizedUsers, data?.currentUserId);
+    const categories = Array.isArray(data?.categories) && data.categories.length ? data.categories : DEFAULT_CATEGORIES;
+    const activeCategoryId = data?.activeCategoryId && categories.some((c: Category) => c.id === data.activeCategoryId)
+      ? data.activeCategoryId
+      : categories[0]?.id || null;
 
     setUsers(normalizedUsers);
-    setCurrentUserId(initialCurrentUserId);
-    setNewTaskAssigneeId(initialCurrentUserId);
-    setIsAuthModalOpen(!initialCurrentUserId);
+    setCurrentUserId(currentUserId);
+    setNewTaskAssigneeId(currentUserId);
+    setIsAuthModalOpen(!currentUserId);
+    setCategories(categories);
+    setActiveCategoryId(activeCategoryId);
+    setTasks(normalizeTasks(Array.isArray(data?.tasks) ? data.tasks : [], currentUserId));
+    setWhatsAppEnabled(Boolean(data?.whatsAppEnabled));
+    setPhoneNumber(data?.phoneNumber || defaultPhoneNumber);
+    setSecondPhoneNumber(data?.secondPhoneNumber || '');
+    setAuditOptions(Array.isArray(data?.auditOptions) ? data.auditOptions : []);
+    setRentals(Array.isArray(data?.rentals) ? data.rentals : []);
+    setAssets(Array.isArray(data?.assets) ? data.assets : []);
+    setActiveSection(['home', 'tasks', 'rentals', 'assets'].includes(data?.activeSection) ? data.activeSection : 'home');
+  };
 
-    if (savedCategories) {
-      const parsed = JSON.parse(savedCategories);
-      setCategories(parsed);
-      if (parsed.length > 0) setActiveCategoryId(parsed[0].id);
-    } else {
-      setCategories(DEFAULT_CATEGORIES);
-      setActiveCategoryId(DEFAULT_CATEGORIES[0].id);
-    }
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      let serverData: any = null;
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/storage`, {
+          headers: { 'ngrok-skip-browser-warning': '1' }
+        });
+        if (response.ok) {
+          serverData = await response.json();
+        }
+      } catch (error) {
+        console.error('Storage okuma hatası:', error);
+      }
 
-    if (savedTasks) {
-      try {
-        const parsedTasks = JSON.parse(savedTasks);
-        const normalizedTasks = parsedTasks.map((task: Task) => ({
-          ...task,
-          createdByUserId: task.createdByUserId || initialCurrentUserId,
-          assignedToUserId: task.assignedToUserId || initialCurrentUserId,
-          expectedDuration: task.expectedDuration || '01:00',
-          expectedDurationMinutes: task.expectedDurationMinutes,
-          dueAt: task.dueAt,
-          repeat: task.repeat || 'once',
-          lastCompletedDate: task.lastCompletedDate,
-          remindersSentMinutes: task.remindersSentMinutes || [],
-          auditItems: task.auditItems || [],
-          auditResults: task.auditResults || [],
-          requiresPhoto: task.requiresPhoto ?? false,
-          completionPhotoDataUrl: task.completionPhotoDataUrl,
-          isExpired: task.isExpired || false
-        }));
-        setTasks(normalizedTasks);
-      } catch {
-        setTasks([]);
-      }
-    }
+      const hasServerData = serverData && (
+        Array.isArray(serverData.users) ||
+        Array.isArray(serverData.categories) ||
+        Array.isArray(serverData.tasks) ||
+        Array.isArray(serverData.rentals) ||
+        Array.isArray(serverData.assets)
+      );
 
-    if (savedWhatsAppEnabled) setWhatsAppEnabled(JSON.parse(savedWhatsAppEnabled));
-    if (savedPhoneNumber) setPhoneNumber(savedPhoneNumber);
-    if (savedSecondPhoneNumber) setSecondPhoneNumber(savedSecondPhoneNumber);
-    if (savedAuditOptions) {
-      try {
-        const parsed = JSON.parse(savedAuditOptions);
-        if (Array.isArray(parsed)) setAuditOptions(parsed);
-      } catch {
-        setAuditOptions([]);
+      const fallbackData = buildLocalData();
+      if (!cancelled) {
+        applyHydratedState(hasServerData ? serverData : fallbackData);
+        setIsHydrated(true);
       }
-    }
-    if (savedRentals) {
-      try {
-        const parsed = JSON.parse(savedRentals);
-        if (Array.isArray(parsed)) setRentals(parsed);
-      } catch {
-        setRentals([]);
+
+      if (!hasServerData) {
+        try {
+          await fetch(`${BACKEND_URL}/api/storage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+            body: JSON.stringify(fallbackData)
+          });
+        } catch (error) {
+          console.error('Storage ilk yazma hatası:', error);
+        }
       }
-    }
-    if (savedAssets) {
-      try {
-        const parsed = JSON.parse(savedAssets);
-        if (Array.isArray(parsed)) setAssets(parsed);
-      } catch {
-        setAssets([]);
-      }
-    }
-    setIsHydrated(true);
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -228,6 +285,57 @@ const App: React.FC = () => {
     if (!isHydrated) return;
     localStorage.setItem('planla_assets_v1', JSON.stringify(assets));
   }, [assets, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = window.setTimeout(async () => {
+      const payload = {
+        users,
+        currentUserId,
+        categories,
+        activeCategoryId,
+        tasks,
+        whatsAppEnabled,
+        phoneNumber,
+        secondPhoneNumber,
+        auditOptions,
+        rentals,
+        assets,
+        activeSection
+      };
+      try {
+        await fetch(`${BACKEND_URL}/api/storage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+          body: JSON.stringify(payload)
+        });
+      } catch (error) {
+        console.error('Storage kaydetme hatası:', error);
+      }
+    }, 500);
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+      }
+    };
+  }, [
+    users,
+    currentUserId,
+    categories,
+    activeCategoryId,
+    tasks,
+    whatsAppEnabled,
+    phoneNumber,
+    secondPhoneNumber,
+    auditOptions,
+    rentals,
+    assets,
+    activeSection,
+    isHydrated
+  ]);
 
   useEffect(() => {
     if (currentUserId) {
@@ -401,11 +509,24 @@ const App: React.FC = () => {
       const status = await getWhatsAppStatus();
       setWhatsAppReady(status.ready);
       setQrCode(status.qrCode);
+      if (!status.hasClient && !whatsAppInitRequested) {
+        const result = await initializeWhatsApp();
+        if (!result.success) {
+          console.error('WhatsApp başlatma hatası:', result.message);
+        }
+        setWhatsAppInitRequested(true);
+      }
     };
 
     checkStatus();
     const interval = setInterval(checkStatus, 3000);
     return () => clearInterval(interval);
+  }, [whatsAppEnabled, whatsAppInitRequested]);
+
+  useEffect(() => {
+    if (!whatsAppEnabled) {
+      setWhatsAppInitRequested(false);
+    }
   }, [whatsAppEnabled]);
 
   const getMonthKey = (date: Date) => {
@@ -982,11 +1103,11 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen app-gradient text-slate-900">
-      <div className="relative min-h-screen px-3 sm:px-6 lg:px-10 py-6 app-safe">
+    <div className="min-h-[100dvh] w-full overflow-x-hidden app-gradient text-slate-900">
+      <div className="relative min-h-[100dvh] px-0 md:px-6 lg:px-10 py-0 md:py-6 app-safe overflow-x-hidden">
         <div className="pointer-events-none absolute -top-24 -left-20 h-72 w-72 rounded-full bg-indigo-500/30 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-24 -right-10 h-80 w-80 rounded-full bg-fuchsia-500/20 blur-3xl" />
-        <div className="app-shell mx-auto max-w-6xl overflow-hidden">
+        <div className="w-full md:app-shell md:mx-auto md:max-w-6xl overflow-hidden">
           <div className="min-h-[calc(100vh-3rem)] flex flex-col md:flex-row bg-[#f8fafc]/90 overflow-hidden">
             {/* Sidebar */}
             <aside className="w-full md:w-80 bg-white/85 backdrop-blur-xl border-r border-white/70 flex flex-col h-auto md:h-screen sticky top-0 z-30 shadow-2xl">

@@ -1,2 +1,3 @@
-2026/01/23-02:59:12.248 29e4 Creating DB C:\Users\fatih\OneDrive\Desktop\yapılacaklar\backend\.wwebjs_auth\session\Default\shared_proto_db\metadata since it was missing.
-2026/01/23-02:59:12.277 29e4 Reusing MANIFEST C:\Users\fatih\OneDrive\Desktop\yapılacaklar\backend\.wwebjs_auth\session\Default\shared_proto_db\metadata/MANIFEST-000001
+2026/01/23-14:29:48.327 177c Reusing MANIFEST C:\Users\fatih\OneDrive\Desktop\yapılacaklar\backend\.wwebjs_auth\session\Default\shared_proto_db\metadata/MANIFEST-000001
+2026/01/23-14:29:48.392 177c Recovering log #3
+2026/01/23-14:29:48.404 177c Reusing old log C:\Users\fatih\OneDrive\Desktop\yapılacaklar\backend\.wwebjs_auth\session\Default\shared_proto_db\metadata/000003.log 

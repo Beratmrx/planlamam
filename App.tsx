@@ -81,6 +81,7 @@ const App: React.FC = () => {
   const [whatsAppInitRequested, setWhatsAppInitRequested] = useState(false);
 
   const saveTimerRef = useRef<number | null>(null);
+  const lastStorageSyncRef = useRef(0);
   const defaultPhoneNumber = '05536789487';
   const defaultAdmin: User = {
     id: 'user-admin',
@@ -184,11 +185,15 @@ const App: React.FC = () => {
 
   const applyHydratedState = (data: any) => {
     const normalizedUsers = normalizeUsers(Array.isArray(data?.users) ? data.users : []);
-    const currentUserId = resolveCurrentUserId(normalizedUsers, data?.currentUserId);
+    const localCurrentUserId = localStorage.getItem('planla_current_user_id');
+    const currentUserId = resolveCurrentUserId(normalizedUsers, localCurrentUserId || data?.currentUserId);
     const categories = Array.isArray(data?.categories) && data.categories.length ? data.categories : DEFAULT_CATEGORIES;
-    const activeCategoryId = data?.activeCategoryId && categories.some((c: Category) => c.id === data.activeCategoryId)
-      ? data.activeCategoryId
+    const localActiveCategoryId = localStorage.getItem('planla_active_category_id');
+    const desiredCategoryId = localActiveCategoryId || data?.activeCategoryId;
+    const activeCategoryId = desiredCategoryId && categories.some((c: Category) => c.id === desiredCategoryId)
+      ? desiredCategoryId
       : categories[0]?.id || null;
+    const localActiveSection = localStorage.getItem('planla_active_section');
 
     setUsers(normalizedUsers);
     setCurrentUserId(currentUserId);
@@ -203,7 +208,10 @@ const App: React.FC = () => {
     setAuditOptions(Array.isArray(data?.auditOptions) ? data.auditOptions : []);
     setRentals(Array.isArray(data?.rentals) ? data.rentals : []);
     setAssets(Array.isArray(data?.assets) ? data.assets : []);
-    setActiveSection(['home', 'tasks', 'rentals', 'assets'].includes(data?.activeSection) ? data.activeSection : 'home');
+    const resolvedSection = ['home', 'tasks', 'rentals', 'assets'].includes(localActiveSection || data?.activeSection)
+      ? (localActiveSection || data?.activeSection)
+      : 'home';
+    setActiveSection(resolvedSection);
   };
 
   useEffect(() => {
@@ -232,16 +240,31 @@ const App: React.FC = () => {
       const fallbackData = buildLocalData();
       if (!cancelled) {
         applyHydratedState(hasServerData ? serverData : fallbackData);
+        if (hasServerData && serverData?.savedAt) {
+          lastStorageSyncRef.current = serverData.savedAt;
+        }
         setIsHydrated(true);
       }
 
       if (!hasServerData) {
         try {
+          const storagePayload = {
+            users: fallbackData.users,
+            categories: fallbackData.categories,
+            tasks: fallbackData.tasks,
+            whatsAppEnabled: fallbackData.whatsAppEnabled,
+            phoneNumber: fallbackData.phoneNumber,
+            secondPhoneNumber: fallbackData.secondPhoneNumber,
+            auditOptions: fallbackData.auditOptions,
+            rentals: fallbackData.rentals,
+            assets: fallbackData.assets
+          };
           await fetch(`${BACKEND_URL}/api/storage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
-            body: JSON.stringify(fallbackData)
+            body: JSON.stringify(storagePayload)
           });
+          lastStorageSyncRef.current = Date.now();
         } catch (error) {
           console.error('Storage ilk yazma hatası:', error);
         }
@@ -255,36 +278,38 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!isHydrated) return;
-    if (categories.length > 0) {
-      localStorage.setItem('planla_categories_v3', JSON.stringify(categories));
-    }
-    localStorage.setItem('planla_tasks_v3', JSON.stringify(tasks));
-  }, [categories, tasks, isHydrated]);
+    const interval = window.setInterval(async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/storage`, {
+          headers: { 'ngrok-skip-browser-warning': '1' }
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (data?.savedAt && data.savedAt > lastStorageSyncRef.current) {
+          lastStorageSyncRef.current = data.savedAt;
+          applyHydratedState(data);
+        }
+      } catch (error) {
+        console.error('Storage senkron hatası:', error);
+      }
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [isHydrated]);
 
   useEffect(() => {
     if (!isHydrated) return;
-    if (users.length > 0) {
-      localStorage.setItem('planla_users_v1', JSON.stringify(users));
-    }
     if (currentUserId) {
       localStorage.setItem('planla_current_user_id', currentUserId);
     }
-  }, [users, currentUserId, isHydrated]);
+  }, [currentUserId, isHydrated]);
 
   useEffect(() => {
     if (!isHydrated) return;
-    localStorage.setItem('planla_audit_options_v1', JSON.stringify(auditOptions));
-  }, [auditOptions, isHydrated]);
-
-  useEffect(() => {
-    if (!isHydrated) return;
-    localStorage.setItem('planla_rentals_v1', JSON.stringify(rentals));
-  }, [rentals, isHydrated]);
-
-  useEffect(() => {
-    if (!isHydrated) return;
-    localStorage.setItem('planla_assets_v1', JSON.stringify(assets));
-  }, [assets, isHydrated]);
+    if (activeCategoryId) {
+      localStorage.setItem('planla_active_category_id', activeCategoryId);
+    }
+    localStorage.setItem('planla_active_section', activeSection);
+  }, [activeCategoryId, activeSection, isHydrated]);
 
   useEffect(() => {
     if (!isHydrated) return;
@@ -294,17 +319,14 @@ const App: React.FC = () => {
     saveTimerRef.current = window.setTimeout(async () => {
       const payload = {
         users,
-        currentUserId,
         categories,
-        activeCategoryId,
         tasks,
         whatsAppEnabled,
         phoneNumber,
         secondPhoneNumber,
         auditOptions,
         rentals,
-        assets,
-        activeSection
+        assets
       };
       try {
         await fetch(`${BACKEND_URL}/api/storage`, {
@@ -312,6 +334,7 @@ const App: React.FC = () => {
           headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
           body: JSON.stringify(payload)
         });
+        lastStorageSyncRef.current = Date.now();
       } catch (error) {
         console.error('Storage kaydetme hatası:', error);
       }
@@ -1103,36 +1126,36 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-[100dvh] w-full overflow-x-hidden app-gradient text-slate-900">
+    <div className="min-h-[100dvh] w-full overflow-x-hidden app-bg text-white">
       <div className="relative min-h-[100dvh] px-0 md:px-6 lg:px-10 py-0 md:py-6 app-safe overflow-x-hidden">
         <div className="pointer-events-none absolute -top-24 -left-20 h-72 w-72 rounded-full bg-indigo-500/30 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-24 -right-10 h-80 w-80 rounded-full bg-fuchsia-500/20 blur-3xl" />
-        <div className="w-full md:app-shell md:mx-auto md:max-w-6xl overflow-hidden">
-          <div className="min-h-[calc(100vh-3rem)] flex flex-col md:flex-row bg-[#f8fafc]/90 overflow-hidden">
+        <div className="w-full md:mx-auto md:max-w-[440px] lg:max-w-[520px] overflow-hidden glass md:rounded-[2.5rem]">
+          <div className="min-h-[100dvh] flex flex-col md:flex-row overflow-hidden">
             {/* Sidebar */}
-            <aside className="w-full md:w-80 bg-white/85 backdrop-blur-xl border-r border-white/70 flex flex-col h-auto md:h-screen sticky top-0 z-30 shadow-2xl">
+            <aside className="w-full md:w-80 glass border-b md:border-b-0 md:border-r border-white/10 flex flex-col h-auto md:h-screen sticky top-0 z-30">
         <div className="p-8 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-fuchsia-500 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200 float-slow">
+            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-blue-500 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-900/40 float-slow">
                <SparklesIcon className="w-6 h-6 text-white" />
             </div>
             <div className="flex flex-col">
-              <h1 className="text-2xl font-black text-slate-800 tracking-tighter">Planla</h1>
+              <h1 className="text-2xl font-black text-white tracking-tighter">Planla</h1>
               <div className="mt-2 flex items-center gap-2">
-                <div className="text-[10px] font-black uppercase tracking-widest bg-slate-100 text-slate-600 px-3 py-2 rounded-xl">
+                <div className="text-[10px] font-black uppercase tracking-widest bg-white/10 text-white/80 px-3 py-2 rounded-xl">
                   {currentUser ? `${currentUser.name} ${currentUser.role === 'admin' ? '(Admin)' : ''}` : 'Giriş yap'}
                 </div>
                 {currentUser?.role === 'admin' && (
                   <button
                     onClick={() => setIsUserModalOpen(true)}
-                    className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all"
+                    className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-white/10 text-white/80 hover:bg-white/20 transition-all"
                   >
                     Kullanıcılar
                   </button>
                 )}
                 <button
                   onClick={handleLogout}
-                  className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-slate-200 text-slate-600 hover:bg-slate-300 transition-all"
+                  className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-white/10 text-white/70 hover:bg-white/20 transition-all"
                 >
                   Çıkış
                 </button>
@@ -1141,7 +1164,7 @@ const App: React.FC = () => {
           </div>
           <button 
             onClick={() => setIsWhatsAppModalOpen(true)}
-            className={`p-2.5 rounded-xl transition-all ${whatsAppReady ? 'bg-emerald-100 text-emerald-600 shadow-lg shadow-emerald-100' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
+            className={`p-2.5 rounded-xl transition-all ${whatsAppReady ? 'bg-emerald-400/20 text-emerald-200 shadow-lg shadow-emerald-900/30' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}
             title="WhatsApp Ayarları"
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1151,11 +1174,11 @@ const App: React.FC = () => {
         </div>
 
         <nav className="hidden md:flex md:flex-col flex-1 overflow-y-auto px-4 py-4 space-y-1.5 custom-scrollbar">
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-4 mb-4">MENÜ</p>
+          <p className="text-[10px] font-black text-white/50 uppercase tracking-widest px-4 mb-4">MENÜ</p>
           <div
             onClick={() => setActiveSection('home')}
             className={`flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
-              activeSection === 'home' ? 'bg-slate-900 text-white shadow-2xl translate-x-1' : 'hover:bg-white/70 text-slate-600'
+              activeSection === 'home' ? 'bg-white/15 text-white shadow-2xl translate-x-1' : 'hover:bg-white/10 text-white/70'
             }`}
           >
             <div className="flex items-center gap-4">
@@ -1171,10 +1194,10 @@ const App: React.FC = () => {
                 setActiveCategoryId(cat.id);
               }}
               className={`group flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
-                activeSection === 'tasks' && activeCategoryId === cat.id 
-                ? `${cat.color} text-white shadow-2xl translate-x-1` 
-                : 'hover:bg-white/70 text-slate-600'
-              }`}
+                  activeSection === 'tasks' && activeCategoryId === cat.id 
+                  ? `${cat.color} text-white shadow-2xl translate-x-1` 
+                  : 'hover:bg-white/10 text-white/70'
+                }`}
             >
               <div className="flex items-center gap-4">
                 <span className="text-2xl">{cat.icon}</span>
@@ -1190,14 +1213,14 @@ const App: React.FC = () => {
           ))}
           <button 
             onClick={() => setIsCategoryModalOpen(true)}
-            className="w-full mt-6 py-4 border-2 border-dashed border-slate-200 rounded-2xl text-slate-400 hover:border-indigo-500 hover:text-indigo-500 transition-all flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest bg-white/70 hover:bg-indigo-50/60"
+            className="w-full mt-6 py-4 border-2 border-dashed border-white/10 rounded-2xl text-white/60 hover:border-indigo-400 hover:text-white transition-all flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest bg-white/5 hover:bg-white/10"
           >
             <PlusIcon className="w-4 h-4" /> Yeni Kategori
           </button>
           <div
             onClick={() => setActiveSection('rentals')}
             className={`mt-6 flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
-              activeSection === 'rentals' ? 'bg-emerald-500 text-white shadow-2xl translate-x-1' : 'hover:bg-white/70 text-slate-600'
+              activeSection === 'rentals' ? 'bg-emerald-500 text-white shadow-2xl translate-x-1' : 'hover:bg-white/10 text-white/70'
             }`}
           >
             <div className="flex items-center gap-4">
@@ -1208,7 +1231,7 @@ const App: React.FC = () => {
           <div
             onClick={() => setActiveSection('assets')}
             className={`mt-3 flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
-              activeSection === 'assets' ? 'bg-sky-500 text-white shadow-2xl translate-x-1' : 'hover:bg-white/70 text-slate-600'
+              activeSection === 'assets' ? 'bg-sky-500 text-white shadow-2xl translate-x-1' : 'hover:bg-white/10 text-white/70'
             }`}
           >
             <div className="flex items-center gap-4">
@@ -1223,16 +1246,16 @@ const App: React.FC = () => {
       <main className="flex-1 p-6 pb-32 md:pb-12 md:p-12 overflow-y-auto custom-scrollbar">
         {activeSection === 'home' ? (
           <div className="max-w-4xl mx-auto space-y-10">
-            <header className="flex flex-col md:flex-row md:items-center justify-between gap-8 bg-gradient-to-br from-white via-white to-slate-50/80 p-10 rounded-[3rem] shadow-2xl border border-white/70">
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 header-glass p-8 rounded-[2.5rem]">
               <div className="flex items-center gap-8">
-                <div className="text-6xl p-8 rounded-[2.5rem] bg-slate-900 text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow">
+                <div className="text-6xl p-7 rounded-[2.2rem] bg-gradient-to-br from-violet-600 to-blue-500 text-white shadow-2xl shadow-indigo-900/40 transform -rotate-2 float-slow">
                   ✨
                 </div>
                 <div>
-                  <h2 className="text-5xl font-black text-slate-800 tracking-tighter">Anasayfa</h2>
+                  <h2 className="text-4xl md:text-5xl font-black text-white tracking-tighter">Anasayfa</h2>
                   <div className="flex items-center gap-2 mt-2">
                     <div className="w-2 h-2 rounded-full bg-slate-900 animate-pulse" />
-                    <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                    <p className="text-white/60 font-black text-[10px] uppercase tracking-[0.2em]">
                       {homeStats.active} aktif · {homeStats.completed} tamamlanan · {homeStats.expired} geciken
                     </p>
                   </div>
@@ -1241,32 +1264,32 @@ const App: React.FC = () => {
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => setHomeFilterStatus('active')}
-                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                    homeFilterStatus === 'active' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'
+                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                    homeFilterStatus === 'active' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
                   }`}
                 >
                   Aktif
                 </button>
                 <button
                   onClick={() => setHomeFilterStatus('completed')}
-                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                    homeFilterStatus === 'completed' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'
+                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                    homeFilterStatus === 'completed' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
                   }`}
                 >
                   Tamamlanan
                 </button>
                 <button
                   onClick={() => setHomeFilterStatus('expired')}
-                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                    homeFilterStatus === 'expired' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'
+                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                    homeFilterStatus === 'expired' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
                   }`}
                 >
                   Geciken
                 </button>
                 <button
                   onClick={() => setHomeFilterStatus('all')}
-                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                    homeFilterStatus === 'all' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'
+                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                    homeFilterStatus === 'all' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
                   }`}
                 >
                   Tümü
@@ -1274,14 +1297,14 @@ const App: React.FC = () => {
               </div>
             </header>
 
-            <div className="bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg p-6">
+            <div className="card-glass rounded-[2.5rem] p-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Kategori</label>
+                  <label className="text-[10px] font-black text-white/50 uppercase tracking-widest mb-2 block">Kategori</label>
                   <select
                     value={homeFilterCategory}
                     onChange={(e) => setHomeFilterCategory(e.target.value)}
-                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-slate-500/10 focus:border-slate-700 font-bold text-slate-600"
+                    className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/20 focus:border-indigo-400 font-bold text-white/80"
                   >
                     <option value="all">Tümü</option>
                     {categories.map(cat => (
@@ -1290,13 +1313,13 @@ const App: React.FC = () => {
                   </select>
                 </div>
                 <div className="md:col-span-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Arama</label>
+                  <label className="text-[10px] font-black text-white/50 uppercase tracking-widest mb-2 block">Arama</label>
                   <input
                     type="text"
                     value={homeFilterText}
                     onChange={(e) => setHomeFilterText(e.target.value)}
                     placeholder="Görev adıyla ara"
-                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-slate-500/10 focus:border-slate-700 font-bold text-slate-600"
+                    className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/20 focus:border-indigo-400 font-bold text-white/80"
                   />
                 </div>
               </div>
@@ -1309,8 +1332,8 @@ const App: React.FC = () => {
                 return (
                   <div
                     key={task.id}
-                    className={`group flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg transition-all duration-300 ${
-                      task.isExpired ? 'ring-2 ring-rose-300/60' : task.isCompleted ? 'opacity-60' : 'hover:shadow-2xl hover:border-slate-200 hover:-translate-y-1'
+                    className={`group flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 card-glass rounded-[2.5rem] transition-all duration-300 ${
+                      task.isExpired ? 'ring-2 ring-rose-400/40' : task.isCompleted ? 'opacity-70' : 'hover:-translate-y-1'
                     }`}
                   >
                     <div className="flex items-center gap-6">
@@ -1318,13 +1341,13 @@ const App: React.FC = () => {
                         {category?.icon || '📌'}
                       </div>
                       <div>
-                        <div className="text-2xl font-black text-slate-800 tracking-tight">
+                        <div className="text-2xl font-black text-white tracking-tight">
                           {task.title}
                         </div>
-                        <div className="text-sm font-bold text-slate-500">
+                        <div className="text-sm font-bold text-white/60">
                           {category?.name || 'Kategori Yok'}
                         </div>
-                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-2">
+                        <div className="text-[10px] font-black uppercase tracking-widest text-white/40 mt-2">
                           Durum: {statusLabel}
                         </div>
                         {task.dueAt && !task.isCompleted && !task.isExpired && (
@@ -1339,10 +1362,10 @@ const App: React.FC = () => {
               })}
 
               {homeTasks.length === 0 && (
-                <div className="text-center py-44 bg-white/70 rounded-[4rem] border-2 border-dashed border-white/70 shadow-xl">
+                <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-white/10">
                   <div className="text-8xl mb-8 opacity-40">✨</div>
-                  <h3 className="text-3xl font-black text-slate-400 tracking-tighter">BUGÜN İŞ YOK</h3>
-                  <p className="text-slate-400 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                  <h3 className="text-3xl font-black text-white/60 tracking-tighter">BUGÜN İŞ YOK</h3>
+                  <p className="text-white/40 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
                     Filtreyi değiştirerek diğer görevleri görebilirsin.
                   </p>
                 </div>
@@ -1352,16 +1375,16 @@ const App: React.FC = () => {
         ) : activeSection === 'tasks' ? (
           activeCategory ? (
             <div className="max-w-4xl mx-auto space-y-10">
-            <header className="flex flex-col md:flex-row md:items-center justify-between gap-8 bg-gradient-to-br from-white via-white to-indigo-50/80 p-10 rounded-[3rem] shadow-2xl border border-white/70">
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 header-glass p-8 rounded-[2.5rem]">
               <div className="flex items-center gap-8">
-                <div className={`text-6xl p-8 rounded-[2.5rem] ${activeCategory.color} text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow`}>
+                <div className={`text-6xl p-7 rounded-[2.2rem] ${activeCategory.color} text-white shadow-2xl shadow-indigo-900/40 transform -rotate-2 float-slow`}>
                     {activeCategory.icon}
                 </div>
                 <div>
-                   <h2 className="text-5xl font-black text-slate-800 tracking-tighter">{activeCategory.name}</h2>
+                   <h2 className="text-4xl md:text-5xl font-black text-white tracking-tighter">{activeCategory.name}</h2>
                    <div className="flex items-center gap-2 mt-2">
                       <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                      <p className="text-white/60 font-black text-[10px] uppercase tracking-[0.2em]">
                         {taskView === 'active' ? activeTasks.length : taskView === 'completed' ? completedTasks.length : expiredTasks.length} {taskView === 'active' ? 'Aktif Görev' : taskView === 'completed' ? 'Tamamlanan Görev' : 'Yapılmayan Görev'}
                       </p>
                    </div>
@@ -1370,26 +1393,26 @@ const App: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setTaskView('active')}
-                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${taskView === 'active' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'}`}
+                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}
                 >
                   Aktif
                 </button>
                 <button
                   onClick={() => setTaskView('completed')}
-                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${taskView === 'completed' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'}`}
+                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}
                 >
                   Tamamlanan
                 </button>
                 <button
                   onClick={() => setTaskView('expired')}
-                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${taskView === 'expired' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white/80 text-slate-500 hover:bg-white'}`}
+                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}
                 >
                   Yapılmayan
                 </button>
               </div>
               <button 
                 onClick={() => { setIsTaskModalOpen(true); setAiSuggestions([]); setSelectedAuditOptions([]); }}
-                className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-indigo-600 via-fuchsia-600 to-pink-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-90 transition-all active:scale-95 shadow-indigo-300"
+                className="group flex items-center gap-4 px-10 py-6 btn-accent text-white rounded-[2rem] font-black hover:opacity-90 transition-all tap-scale shadow-indigo-300"
               >
                 <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" /> 
                 GÖREV EKLE
@@ -1410,55 +1433,56 @@ const App: React.FC = () => {
                       }
                     }
                   }}
-                  className={`group flex items-center justify-between p-8 bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg transition-all duration-300 ${task.isCompleted ? 'opacity-30 grayscale' : 'hover:shadow-2xl hover:border-indigo-200 hover:-translate-y-1.5'}`}
+                  className={`group flex flex-col md:flex-row md:items-center gap-6 justify-between p-6 md:p-8 card-glass rounded-[2.5rem] transition-all duration-300 ${task.isCompleted ? 'opacity-30 grayscale' : 'hover:-translate-y-1'}`}
                 >
-                  <div className="flex items-center gap-8 flex-1">
+                  <div className="flex items-start md:items-center gap-5 md:gap-8 flex-1">
                     <button 
                       onClick={(e) => { e.stopPropagation(); if (!task.isExpired) toggleTask(task.id); }} 
                       disabled={task.isExpired}
-                      className={`w-12 h-12 rounded-2xl border-2 flex items-center justify-center transition-all duration-500 ${task.isCompleted ? 'bg-indigo-600 border-indigo-600 text-white rotate-[360deg]' : 'border-slate-100 hover:border-indigo-500 bg-slate-50'}`}
+                      className={`w-14 h-14 md:w-12 md:h-12 rounded-2xl border-2 flex items-center justify-center transition-all duration-500 touch-manipulation ${task.isCompleted ? 'bg-indigo-600 border-indigo-600 text-white rotate-[360deg]' : 'border-slate-100 hover:border-indigo-500 bg-slate-50'}`}
                     >
                       {task.isCompleted && <CheckIcon className="w-8 h-8 stroke-[4px]" />}
                     </button>
                     <div className="flex flex-col gap-2">
-                      <span className={`text-2xl font-black text-slate-700 tracking-tight transition-all ${task.isCompleted ? 'line-through opacity-50' : ''}`}>
+                      <span className={`text-2xl font-black text-white tracking-tight transition-all ${task.isCompleted ? 'line-through opacity-50' : ''}`}>
                         {task.title}
                       </span>
-                      <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                      <span className="text-xs font-bold text-white/50 uppercase tracking-widest">
                         Ekleyen: {users.find(u => u.id === task.createdByUserId)?.name || 'Bilinmiyor'} · Atanan: {users.find(u => u.id === task.assignedToUserId)?.name || 'Bilinmiyor'} · Süre: {task.expectedDuration || '00:00'} · {task.repeat === 'daily' ? 'Her gün' : 'Tek sefer'}
                       </span>
                       {task.auditItems && task.auditItems.length > 0 && (
-                        <span className="text-xs font-black text-slate-500 uppercase tracking-widest">
+                        <span className="text-xs font-black text-white/50 uppercase tracking-widest">
                           Denetim: {task.auditItems.length} seçenek
                         </span>
                       )}
                       {task.requiresPhoto && (
-                        <span className="text-xs font-black text-indigo-500 uppercase tracking-widest">
+                        <span className="text-xs font-black text-cyan-300 uppercase tracking-widest">
                           Fotoğraf zorunlu
                         </span>
                       )}
                       {task.completionPhotoDataUrl && (
-                        <span className="text-xs font-black text-emerald-500 uppercase tracking-widest">
+                        <span className="text-xs font-black text-emerald-300 uppercase tracking-widest">
                           Fotoğraf eklendi
                         </span>
                       )}
                       {task.auditResults && task.auditResults.some(result => result.status === 'fail') && (
-                        <span className="text-xs font-black text-rose-500 uppercase tracking-widest">
+                        <span className="text-xs font-black text-rose-300 uppercase tracking-widest">
                           Eksikler var (fotoğraflar mevcut)
                         </span>
                       )}
                       {task.dueAt && !task.isCompleted && !task.isExpired && (
-                        <span className="text-xs font-black text-amber-500 uppercase tracking-widest">
+                        <span className="text-xs font-black text-amber-300 uppercase tracking-widest">
                           Geri sayım: {formatRemaining(task.dueAt - nowTs)}
                         </span>
                       )}
                       {task.isExpired && (
-                        <span className="text-xs font-black text-rose-500 uppercase tracking-widest">
+                        <span className="text-xs font-black text-rose-300 uppercase tracking-widest">
                           Süresi geçti
                         </span>
                       )}
                     </div>
                   </div>
+                  <div className="flex flex-wrap items-center gap-3 md:gap-4 justify-end">
                   {task.isCompleted && task.auditResults?.some(result => result.status === 'fail') && (
                     <button
                       onClick={(e) => {
@@ -1486,15 +1510,16 @@ const App: React.FC = () => {
                   >
                     <TrashIcon className="w-6 h-6" />
                   </button>
+                  </div>
                 </div>
               ))}
               {visibleTasks.length === 0 && (
-                <div className="text-center py-44 bg-white/70 rounded-[4rem] border-2 border-dashed border-white/70 shadow-xl">
+                <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-white/10">
                   <div className="text-8xl mb-8 opacity-40">✨</div>
-                  <h3 className="text-3xl font-black text-slate-400 tracking-tighter">
+                  <h3 className="text-3xl font-black text-white/60 tracking-tighter">
                     {taskView === 'active' ? 'HER ŞEY YOLUNDA!' : taskView === 'completed' ? 'TAMAMLANAN YOK' : 'YAPILMAYAN YOK'}
                   </h3>
-                  <p className="text-slate-400 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                  <p className="text-white/40 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
                     {taskView === 'active' ? 'Bugünlük planların bitti.' : taskView === 'completed' ? 'Henüz tamamlanan görev yok.' : 'Süresi geçen görev yok.'}
                   </p>
                 </div>
@@ -1706,21 +1731,21 @@ const App: React.FC = () => {
 
       {/* Mobile Category Bar */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 px-4 pb-4">
-        <div className="bg-white/80 backdrop-blur-xl border border-white/70 shadow-2xl rounded-[2rem] p-3">
+        <div className="nav-glass rounded-[2rem] p-3">
           <div className="flex items-center gap-2 overflow-x-auto custom-scrollbar">
             <button
               onClick={() => setActiveSection('home')}
-              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${
+              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
                 activeSection === 'home'
-                  ? 'bg-slate-900 text-white shadow-lg'
-                  : 'bg-white/70 text-slate-700 border border-white/70 shadow-md'
+                  ? 'btn-primary text-white'
+                  : 'bg-white/10 text-white/70 border border-white/10'
               }`}
             >
               ✨ Anasayfa
             </button>
             <button
               onClick={() => setIsCategoryModalOpen(true)}
-              className="shrink-0 px-4 py-3 rounded-full bg-gradient-to-r from-indigo-600 to-fuchsia-500 text-white text-[10px] font-black uppercase tracking-widest shadow-lg"
+              className="shrink-0 px-4 py-3 rounded-full btn-accent text-white text-[10px] font-black uppercase tracking-widest tap-scale"
             >
               + Kategori
             </button>
@@ -1733,10 +1758,10 @@ const App: React.FC = () => {
                     setActiveSection('tasks');
                     setActiveCategoryId(cat.id);
                   }}
-                  className={`shrink-0 flex items-center gap-2 px-4 py-3 rounded-full border transition-all ${
+                  className={`shrink-0 flex items-center gap-2 px-4 py-3 rounded-full border transition-all tap-scale ${
                     isActive
-                      ? 'bg-slate-900 text-white border-slate-900 shadow-lg'
-                      : 'bg-white/70 text-slate-700 border-white/70 shadow-md'
+                      ? 'bg-white/15 text-white border-white/20'
+                      : 'bg-white/5 text-white/70 border-white/10'
                   }`}
                 >
                   <span className="text-lg leading-none">{cat.icon}</span>
@@ -1746,20 +1771,20 @@ const App: React.FC = () => {
             })}
             <button
               onClick={() => setActiveSection('rentals')}
-              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${
+              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
                 activeSection === 'rentals'
                   ? 'bg-emerald-500 text-white shadow-lg'
-                  : 'bg-white/70 text-slate-700 border border-white/70 shadow-md'
+                  : 'bg-white/10 text-white/70 border border-white/10'
               }`}
             >
               🏠 Kiralar
             </button>
             <button
               onClick={() => setActiveSection('assets')}
-              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${
+              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
                 activeSection === 'assets'
                   ? 'bg-sky-500 text-white shadow-lg'
-                  : 'bg-white/70 text-slate-700 border border-white/70 shadow-md'
+                  : 'bg-white/10 text-white/70 border border-white/10'
               }`}
             >
               🧰 Demirbaşlar
@@ -1767,7 +1792,7 @@ const App: React.FC = () => {
             {activeSection === 'rentals' && (
               <button
                 onClick={() => setIsRentalModalOpen(true)}
-                className="shrink-0 px-4 py-3 rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500 text-white text-[10px] font-black uppercase tracking-widest shadow-lg"
+                className="shrink-0 px-4 py-3 rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500 text-white text-[10px] font-black uppercase tracking-widest tap-scale"
               >
                 + Kira
               </button>
@@ -1775,7 +1800,7 @@ const App: React.FC = () => {
             {activeSection === 'assets' && (
               <button
                 onClick={() => setIsAssetModalOpen(true)}
-                className="shrink-0 px-4 py-3 rounded-full bg-gradient-to-r from-sky-500 to-blue-500 text-white text-[10px] font-black uppercase tracking-widest shadow-lg"
+                className="shrink-0 px-4 py-3 rounded-full bg-gradient-to-r from-sky-500 to-blue-500 text-white text-[10px] font-black uppercase tracking-widest tap-scale"
               >
                 + Demirbaş
               </button>

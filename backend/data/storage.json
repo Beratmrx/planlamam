@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "savedAt": 1769470482023,
+  "users": [
+    {
+      "id": "user-admin",
+      "name": "Admin",
+      "username": "admin",
+      "password": "admin123",
+      "role": "admin",
+      "phoneNumber": "05536789487"
+    }
+  ],
+  "categories": [
+    {
+      "id": "cat-1",
+      "name": "Günlük",
+      "color": "bg-indigo-500",
+      "icon": "📅"
+    },
+    {
+      "id": "cat-2",
+      "name": "İş",
+      "color": "bg-rose-500",
+      "icon": "💼"
+    },
+    {
+      "id": "cat-3",
+      "name": "Temizlik",
+      "color": "bg-emerald-500",
+      "icon": "🧹"
+    },
+    {
+      "id": "cat-4",
+      "name": "Alışveriş",
+      "color": "bg-amber-500",
+      "icon": "🛒"
+    },
+    {
+      "id": "cat-5",
+      "name": "Denetim",
+      "color": "bg-sky-500",
+      "icon": "🧾"
+    },
+    {
+      "id": "cat-1769470101786",
+      "name": "ffhhfds",
+      "icon": "💼",
+      "color": "bg-pink-500"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-1769459182916-7n13rpz93",
+      "categoryId": "cat-1",
+      "title": "göründü vallah",
+      "isCompleted": true,
+      "createdAt": 1769459182916,
+      "createdByUserId": "user-admin",
+      "assignedToUserId": "user-admin",
+      "expectedDuration": "01:00",
+      "expectedDurationMinutes": 60,
+      "dueAt": 1769462782916,
+      "repeat": "once",
+      "auditItems": [],
+      "auditResults": [],
+      "requiresPhoto": false,
+      "remindersSentMinutes": [],
+      "isExpired": false
+    },
+    {
+      "id": "task-1769459155380-7jdtwn2jj",
+      "categoryId": "cat-1",
+      "title": "tüm tarayıcılardan görünür",
+      "isCompleted": false,
+      "createdAt": 1769459155380,
+      "createdByUserId": "user-admin",
+      "assignedToUserId": "user-admin",
+      "expectedDuration": "01:00",
+      "expectedDurationMinutes": 60,
+      "dueAt": 1769462755380,
+      "repeat": "once",
+      "auditItems": [],
+      "auditResults": [],
+      "requiresPhoto": false,
+      "remindersSentMinutes": [
+        30
+      ],
+      "isExpired": true
+    },
+    {
+      "id": "task-1769458212832-t42h6inlt",
+      "categoryId": "cat-1",
+      "title": "deneme ",
+      "isCompleted": false,
+      "createdAt": 1769458212832,
+      "createdByUserId": "user-admin",
+      "assignedToUserId": "user-admin",
+      "expectedDuration": "01:00",
+      "expectedDurationMinutes": 60,
+      "dueAt": 1769461812832,
+      "repeat": "once",
+      "auditItems": [],
+      "auditResults": [],
+      "requiresPhoto": false,
+      "remindersSentMinutes": [
+        30
+      ],
+      "isExpired": true
+    }
+  ],
+  "whatsAppEnabled": true,
+  "phoneNumber": "05536789487",
+  "secondPhoneNumber": "",
+  "auditOptions": [],
+  "rentals": [],
+  "assets": []
+}

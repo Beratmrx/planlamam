@@ -1,19 +1,15 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import qrcode from 'qrcode';
 import qrTerminal from 'qrcode-terminal';
 import pkg from 'whatsapp-web.js';
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { getStorageFormat, saveStorageFormat } from './database.js';
 const { Client, LocalAuth } = pkg;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const storageDir = path.join(__dirname, 'data');
-const storageFile = path.join(storageDir, 'storage.json');
 
 app.use(cors());
 app.use(express.json());
@@ -22,29 +18,6 @@ let whatsappClient = null;
 let qrCodeData = null;
 let isWhatsAppReady = false;
 let isSendSeenPatched = false;
-
-const readStorage = async () => {
-  try {
-    await fs.promises.mkdir(storageDir, { recursive: true });
-    const raw = await fs.promises.readFile(storageFile, 'utf-8');
-    return JSON.parse(raw);
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
-    console.error('❌ Storage okuma hatası:', error.message);
-    return null;
-  }
-};
-
-const writeStorage = async (payload) => {
-  try {
-    await fs.promises.mkdir(storageDir, { recursive: true });
-    await fs.promises.writeFile(storageFile, JSON.stringify(payload, null, 2), 'utf-8');
-    return true;
-  } catch (error) {
-    console.error('❌ Storage yazma hatası:', error.message);
-    return false;
-  }
-};
 
 const patchSendSeen = async () => {
   if (!whatsappClient?.pupPage) return false;
@@ -176,21 +149,27 @@ const initializeWhatsApp = () => {
 
 // API Endpoints
 app.get('/api/storage', async (req, res) => {
-  const data = await readStorage();
-  res.json(data || { version: 1 });
+  try {
+    const data = await getStorageFormat();
+    res.json(data);
+  } catch (error) {
+    console.error('❌ Storage okuma hatası:', error);
+    res.status(500).json({ success: false, message: 'Storage okunamadı' });
+  }
 });
 
 app.post('/api/storage', async (req, res) => {
-  const payload = req.body || {};
-  const ok = await writeStorage({
-    version: 1,
-    savedAt: Date.now(),
-    ...payload
-  });
-  if (!ok) {
-    return res.status(500).json({ success: false, message: 'Storage yazılamadı' });
+  try {
+    const payload = req.body || {};
+    const ok = await saveStorageFormat(payload);
+    if (!ok) {
+      return res.status(500).json({ success: false, message: 'Storage yazılamadı' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('❌ Storage yazma hatası:', error);
+    res.status(500).json({ success: false, message: 'Storage yazılamadı' });
   }
-  res.json({ success: true });
 });
 
 app.get('/api/whatsapp/status', (req, res) => {

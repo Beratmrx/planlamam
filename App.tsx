@@ -3,7 +3,6 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Task, Category, User, Rental, AssetItem } from './types';
 import { DEFAULT_CATEGORIES, CATEGORY_COLORS, CATEGORY_ICONS } from './constants';
 import { PlusIcon, TrashIcon, SparklesIcon, CheckIcon } from './components/Icons';
-import { getSmartSuggestions } from './services/geminiService';
 import { initializeWhatsApp, getWhatsAppStatus, sendWhatsAppMessage } from './services/whatsappService';
 
 const BACKEND_URL = (import.meta as any).env?.VITE_BACKEND_URL || 'http://localhost:3001';
@@ -26,6 +25,9 @@ const App: React.FC = () => {
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [selectedTaskCategoryId, setSelectedTaskCategoryId] = useState<string | null>(null);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [newCategoryIcon, setNewCategoryIcon] = useState(CATEGORY_ICONS[0]);
   const [newCategoryColor, setNewCategoryColor] = useState(CATEGORY_COLORS[0]);
@@ -46,8 +48,6 @@ const App: React.FC = () => {
   const [isCompletionPhotoModalOpen, setIsCompletionPhotoModalOpen] = useState(false);
   const [activeCompletionPhotoTaskId, setActiveCompletionPhotoTaskId] = useState<string | null>(null);
   const [completionPhotoDataUrl, setCompletionPhotoDataUrl] = useState<string | null>(null);
-  const [isAIThinking, setIsAIThinking] = useState(false);
-  const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [newUserName, setNewUserName] = useState('');
   const [newUserRole, setNewUserRole] = useState<'admin' | 'user'>('user');
   const [newUserPhone, setNewUserPhone] = useState('');
@@ -70,6 +70,8 @@ const App: React.FC = () => {
   const [homeFilterStatus, setHomeFilterStatus] = useState<'active' | 'completed' | 'expired' | 'all'>('active');
   const [homeFilterCategory, setHomeFilterCategory] = useState('all');
   const [homeFilterText, setHomeFilterText] = useState('');
+  const [tasksAllFilterCategory, setTasksAllFilterCategory] = useState('all');
+  const [tasksAllFilterText, setTasksAllFilterText] = useState('');
   
   // WhatsApp States
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
@@ -611,6 +613,27 @@ const App: React.FC = () => {
     [visibleByUser, activeCategoryId]
   );
   const visibleTasks = taskView === 'active' ? activeTasks : taskView === 'completed' ? completedTasks : expiredTasks;
+  const tasksAllFiltered = useMemo(() => {
+    let list = visibleByUser;
+    if (taskView === 'active') {
+      list = list.filter(t => !t.isExpired && (t.repeat === 'daily' || !t.isCompleted));
+    } else if (taskView === 'completed') {
+      list = list.filter(t => t.repeat === 'once' && t.isCompleted);
+    } else {
+      list = list.filter(t => t.isExpired);
+    }
+
+    if (tasksAllFilterCategory !== 'all') {
+      list = list.filter(t => t.categoryId === tasksAllFilterCategory);
+    }
+
+    const q = tasksAllFilterText.trim().toLowerCase();
+    if (q) {
+      list = list.filter(t => (t.title || '').toLowerCase().includes(q));
+    }
+
+    return list;
+  }, [visibleByUser, taskView, tasksAllFilterCategory, tasksAllFilterText]);
   const currentMonthKey = useMemo(() => getMonthKey(new Date(nowTs)), [nowTs]);
   const rentalsWithStatus = useMemo(() => {
     const nowDate = new Date(nowTs);
@@ -663,11 +686,53 @@ const App: React.FC = () => {
     return { active, completed, expired };
   }, [visibleByUser]);
 
-  const handleAddCategory = () => {
+  const openCreateCategoryModal = () => {
+    setEditingCategoryId(null);
+    setNewCategoryName('');
+    setNewCategoryIcon(CATEGORY_ICONS[0]);
+    setNewCategoryColor(CATEGORY_COLORS[0]);
+    setIsCategoryModalOpen(true);
+  };
+
+  const openEditCategoryModal = (categoryId: string) => {
+    const cat = categories.find(c => c.id === categoryId);
+    if (!cat) return;
+    setEditingCategoryId(categoryId);
+    setNewCategoryName(cat.name);
+    setNewCategoryIcon(cat.icon);
+    setNewCategoryColor(cat.color);
+    setIsCategoryModalOpen(true);
+  };
+
+  const deleteCategoryById = (id: string) => {
+    if (categories.length <= 1) return alert("En az bir kategori kalmalıdır.");
+    const newCats = categories.filter(c => c.id !== id);
+    setCategories(newCats);
+    setTasks(tasks.filter(t => t.categoryId !== id));
+
+    const fallbackId = newCats[0]?.id || null;
+    if (activeCategoryId === id) setActiveCategoryId(fallbackId);
+    if (selectedTaskCategoryId === id) setSelectedTaskCategoryId(fallbackId);
+  };
+
+  const handleSaveCategory = () => {
     if (!newCategoryName.trim()) return;
+
+    if (editingCategoryId) {
+      setCategories(prev => prev.map(cat => (
+        cat.id === editingCategoryId
+          ? { ...cat, name: newCategoryName.trim(), icon: newCategoryIcon, color: newCategoryColor }
+          : cat
+      )));
+      setEditingCategoryId(null);
+      setNewCategoryName('');
+      setIsCategoryModalOpen(false);
+      return;
+    }
+
     const newCat: Category = {
       id: `cat-${Date.now()}`,
-      name: newCategoryName,
+      name: newCategoryName.trim(),
       icon: newCategoryIcon,
       color: newCategoryColor
     };
@@ -675,15 +740,49 @@ const App: React.FC = () => {
     setNewCategoryName('');
     setIsCategoryModalOpen(false);
     setActiveCategoryId(newCat.id);
+    setSelectedTaskCategoryId(newCat.id);
   };
 
   const handleDeleteCategory = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (categories.length <= 1) return alert("En az bir kategori kalmalıdır.");
-    const newCats = categories.filter(c => c.id !== id);
-    setCategories(newCats);
-    setTasks(tasks.filter(t => t.categoryId !== id));
-    if (activeCategoryId === id) setActiveCategoryId(newCats[0].id);
+    deleteCategoryById(id);
+  };
+
+  const openCreateTaskModal = (categoryId?: string | null) => {
+    setEditingTaskId(null);
+    const nextCategoryId = categoryId || selectedTaskCategoryId || activeCategoryId || categories[0]?.id || null;
+    setSelectedTaskCategoryId(nextCategoryId);
+    if (nextCategoryId) setActiveCategoryId(nextCategoryId);
+    setIsTaskModalOpen(true);
+    setSelectedAuditOptions([]);
+  };
+
+  const openEditTaskModal = (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+    if (task.isExpired || task.isCompleted) {
+      alert('Sadece aktif görevler düzenlenebilir.');
+      return;
+    }
+    setEditingTaskId(taskId);
+    setSelectedTaskCategoryId(task.categoryId);
+    setActiveCategoryId(task.categoryId);
+    setNewTaskTitle(task.title);
+    setNewTaskAssigneeId(task.assignedToUserId);
+    setNewTaskExpectedDuration(task.expectedDuration || '01:00');
+    setNewTaskRepeat(task.repeat || 'once');
+    setNewTaskRequiresPhoto(Boolean(task.requiresPhoto));
+    setSelectedAuditOptions(task.auditItems || []);
+    setIsTaskModalOpen(true);
+  };
+
+  const resetTaskModalState = () => {
+    setNewTaskTitle('');
+    setNewTaskExpectedDuration('01:00');
+    setNewTaskRepeat('once');
+    setSelectedAuditOptions([]);
+    setNewTaskRequiresPhoto(false);
+    setEditingTaskId(null);
   };
 
   const handleAddTask = async (titleOverride?: string) => {
@@ -691,22 +790,55 @@ const App: React.FC = () => {
     const assignedId = newTaskAssigneeId || currentUserId || '';
     const creatorId = currentUserId || assignedId;
     const durationMinutes = parseDurationMinutes(newTaskExpectedDuration.trim());
-    if (!finalTitle.trim() || !activeCategoryId || !assignedId || !creatorId || durationMinutes <= 0) {
-      alert('Lütfen görev adı, atanan kişi ve beklenen süreyi girin.');
+    const categoryIdToUse = selectedTaskCategoryId || activeCategoryId;
+
+    if (!finalTitle.trim() || !categoryIdToUse || !assignedId || !creatorId || durationMinutes <= 0) {
+      alert('Lütfen görev adı, kategori, atanan kişi ve beklenen süreyi girin.');
       return;
     }
 
+    // Edit mode: only active tasks
+    if (editingTaskId) {
+      const existing = tasks.find(t => t.id === editingTaskId);
+      if (!existing || existing.isExpired || existing.isCompleted) {
+        alert('Sadece aktif görevler düzenlenebilir.');
+        return;
+      }
+
+      const updated: Task = {
+        ...existing,
+        categoryId: categoryIdToUse,
+        title: finalTitle.trim(),
+        assignedToUserId: assignedId,
+        expectedDuration: newTaskExpectedDuration.trim(),
+        expectedDurationMinutes: durationMinutes,
+        dueAt: Date.now() + durationMinutes * 60 * 1000,
+        repeat: newTaskRepeat,
+        auditItems: isAuditCategory ? selectedAuditOptions : [],
+        auditResults: [],
+        requiresPhoto: !isAuditCategory ? newTaskRequiresPhoto : false,
+        remindersSentMinutes: [],
+      };
+
+      setTasks(prev => prev.map(t => (t.id === editingTaskId ? updated : t)));
+      setIsTaskModalOpen(false);
+      resetTaskModalState();
+      return;
+    }
+
+    // Create mode
+    const now = Date.now();
     const newTask: Task = {
-      id: `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      categoryId: activeCategoryId,
-      title: finalTitle,
+      id: `task-${now}-${Math.random().toString(36).substr(2, 9)}`,
+      categoryId: categoryIdToUse,
+      title: finalTitle.trim(),
       isCompleted: false,
-      createdAt: Date.now(),
+      createdAt: now,
       createdByUserId: creatorId,
       assignedToUserId: assignedId,
       expectedDuration: newTaskExpectedDuration.trim(),
       expectedDurationMinutes: durationMinutes,
-      dueAt: Date.now() + durationMinutes * 60 * 1000,
+      dueAt: now + durationMinutes * 60 * 1000,
       repeat: newTaskRepeat,
       auditItems: isAuditCategory ? selectedAuditOptions : [],
       auditResults: [],
@@ -715,20 +847,15 @@ const App: React.FC = () => {
     };
 
     setTasks([newTask, ...tasks]);
-    setNewTaskTitle('');
-    setNewTaskExpectedDuration('01:00');
-    setNewTaskRepeat('once');
-    setSelectedAuditOptions([]);
-    setNewTaskRequiresPhoto(false);
     setIsTaskModalOpen(false);
-    setAiSuggestions([]);
+    resetTaskModalState();
 
     const assignedUser = users.find(u => u.id === assignedId);
     if ((whatsAppEnabled || whatsAppReady) && assignedUser?.phoneNumber) {
-      const category = categories.find(c => c.id === activeCategoryId);
+      const category = categories.find(c => c.id === categoryIdToUse);
       const repeatLabel = newTaskRepeat === 'daily' ? 'Her gün' : 'Tek sefer';
       const durationLabel = newTaskExpectedDuration.trim() || '01:00';
-      const message = `📌 Yeni görev atandı!\n\n📝 ${finalTitle}\n📁 Kategori: ${category?.name || 'Bilinmiyor'}\n⏱️ Süre: ${durationLabel}\n🔁 Tekrar: ${repeatLabel}\n\nLütfen görevi tamamlayın.`;
+      const message = `📌 Yeni görev atandı!\n\n📝 ${finalTitle.trim()}\n📁 Kategori: ${category?.name || 'Bilinmiyor'}\n⏱️ Süre: ${durationLabel}\n🔁 Tekrar: ${repeatLabel}\n\nLütfen görevi tamamlayın.`;
       try {
         await sendWhatsAppMessage(assignedUser.phoneNumber, message);
       } catch (error) {
@@ -737,18 +864,13 @@ const App: React.FC = () => {
     }
   };
 
-  const handleFetchSuggestions = async () => {
-    if (!activeCategory) return;
-    setIsAIThinking(true);
-    try {
-      const suggestions = await getSmartSuggestions(activeCategory.name);
-      setAiSuggestions(suggestions);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setIsAIThinking(false);
-    }
-  };
+  // Task modal: ensure a default selected category while open
+  useEffect(() => {
+    if (!isTaskModalOpen) return;
+    const fallback = selectedTaskCategoryId || activeCategoryId || categories[0]?.id || null;
+    if (fallback && fallback !== activeCategoryId) setActiveCategoryId(fallback);
+    if (!selectedTaskCategoryId) setSelectedTaskCategoryId(fallback);
+  }, [isTaskModalOpen, selectedTaskCategoryId, activeCategoryId, categories]);
 
   const handleWhatsAppInitialize = async () => {
     const result = await initializeWhatsApp();
@@ -1119,43 +1241,48 @@ const App: React.FC = () => {
 
   const deleteAsset = (assetId: string) => {
     if (currentUser?.role !== 'admin') {
-      alert('Sadece admin demirbaş silebilir.');
+      alert('Sadece admin stok silebilir.');
       return;
     }
     setAssets(prev => prev.filter(item => item.id !== assetId));
   };
 
   return (
-    <div className="min-h-[100dvh] w-full overflow-x-hidden app-bg text-white">
+    <div className="min-h-[100dvh] w-full overflow-x-hidden app-bg text-slate-900">
       <div className="relative min-h-[100dvh] px-0 md:px-6 lg:px-10 py-0 md:py-6 app-safe overflow-x-hidden">
-        <div className="pointer-events-none absolute -top-24 -left-20 h-72 w-72 rounded-full bg-indigo-500/30 blur-3xl" />
-        <div className="pointer-events-none absolute -bottom-24 -right-10 h-80 w-80 rounded-full bg-fuchsia-500/20 blur-3xl" />
-        <div className="w-full md:mx-auto md:max-w-[440px] lg:max-w-[520px] overflow-hidden glass md:rounded-[2.5rem]">
-          <div className="min-h-[100dvh] flex flex-col md:flex-row overflow-hidden">
+        <div className="pointer-events-none absolute -top-24 -left-20 h-72 w-72 rounded-full bg-indigo-500/10 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-24 -right-10 h-80 w-80 rounded-full bg-fuchsia-500/10 blur-3xl" />
+        <div className="w-full mx-auto max-w-[1400px] overflow-hidden">
+          <div className="min-h-[100dvh] flex flex-col lg:flex-row overflow-hidden">
             {/* Sidebar */}
-            <aside className="w-full md:w-80 glass border-b md:border-b-0 md:border-r border-white/10 flex flex-col h-auto md:h-screen sticky top-0 z-30">
+            <aside className="hidden lg:flex lg:w-[340px] nav-glass border-r border-slate-200/60 flex-col h-[100dvh] sticky top-0 z-30">
         <div className="p-8 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-blue-500 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-900/40 float-slow">
+            <div className="w-11 h-11 bg-gradient-to-br from-indigo-500 to-blue-500 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-200/60 float-slow">
                <SparklesIcon className="w-6 h-6 text-white" />
             </div>
             <div className="flex flex-col">
-              <h1 className="text-2xl font-black text-white tracking-tighter">Planla</h1>
+              <h1 className="text-3xl font-black tracking-tighter bg-gradient-to-r from-indigo-600 via-blue-600 to-fuchsia-600 bg-clip-text text-transparent">
+                Planla
+              </h1>
               <div className="mt-2 flex items-center gap-2">
-                <div className="text-[10px] font-black uppercase tracking-widest bg-white/10 text-white/80 px-3 py-2 rounded-xl">
-                  {currentUser ? `${currentUser.name} ${currentUser.role === 'admin' ? '(Admin)' : ''}` : 'Giriş yap'}
+                <div className="flex items-center gap-2 px-3 py-2 rounded-2xl bg-white/70 border border-slate-200/60">
+                  <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-slate-200 to-slate-100 border border-slate-200/70" />
+                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-700">
+                    {currentUser ? `${currentUser.name} ${currentUser.role === 'admin' ? '(Admin)' : ''}` : 'Giriş yap'}
+                  </div>
                 </div>
                 {currentUser?.role === 'admin' && (
                   <button
                     onClick={() => setIsUserModalOpen(true)}
-                    className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-white/10 text-white/80 hover:bg-white/20 transition-all"
+                    className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-2xl bg-white/70 border border-slate-200/60 text-slate-700 hover:shadow-lg hover:shadow-indigo-100 transition-all hover-glow"
                   >
                     Kullanıcılar
                   </button>
                 )}
                 <button
                   onClick={handleLogout}
-                  className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl bg-white/10 text-white/70 hover:bg-white/20 transition-all"
+                  className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-2xl bg-white/70 border border-slate-200/60 text-slate-600 hover:text-slate-800 transition-all hover-glow"
                 >
                   Çıkış
                 </button>
@@ -1164,7 +1291,7 @@ const App: React.FC = () => {
           </div>
           <button 
             onClick={() => setIsWhatsAppModalOpen(true)}
-            className={`p-2.5 rounded-xl transition-all ${whatsAppReady ? 'bg-emerald-400/20 text-emerald-200 shadow-lg shadow-emerald-900/30' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}
+            className={`p-3 rounded-2xl transition-all border ${whatsAppReady ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-lg shadow-emerald-100' : 'bg-white/70 text-slate-600 border-slate-200/60 hover:shadow-lg hover:shadow-slate-200'}`}
             title="WhatsApp Ayarları"
           >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
@@ -1173,17 +1300,32 @@ const App: React.FC = () => {
           </button>
         </div>
 
-        <nav className="hidden md:flex md:flex-col flex-1 overflow-y-auto px-4 py-4 space-y-1.5 custom-scrollbar">
-          <p className="text-[10px] font-black text-white/50 uppercase tracking-widest px-4 mb-4">MENÜ</p>
+        <nav className="flex flex-col flex-1 overflow-y-auto px-4 py-4 space-y-1.5 custom-scrollbar">
+          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-4 mb-4">MENÜ</p>
           <div
             onClick={() => setActiveSection('home')}
-            className={`flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
-              activeSection === 'home' ? 'bg-white/15 text-white shadow-2xl translate-x-1' : 'hover:bg-white/10 text-white/70'
+            className={`flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${
+              activeSection === 'home' ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
             }`}
           >
-            <div className="flex items-center gap-4">
-              <span className="text-2xl">✨</span>
-              <span className="font-bold tracking-tight">Anasayfa</span>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xl leading-none">✨</span>
+              <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Anasayfa</span>
+            </div>
+          </div>
+
+          <div
+            onClick={() => {
+              setActiveSection('tasks');
+              setActiveCategoryId(null); // "Tüm Görevler" görünümü
+            }}
+            className={`mt-3 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${
+              activeSection === 'tasks' && !activeCategoryId ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
+            }`}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xl leading-none">📝</span>
+              <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Görevler</span>
             </div>
           </div>
           {categories.map((cat) => (
@@ -1193,19 +1335,19 @@ const App: React.FC = () => {
                 setActiveSection('tasks');
                 setActiveCategoryId(cat.id);
               }}
-              className={`group flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
+              className={`group flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${
                   activeSection === 'tasks' && activeCategoryId === cat.id 
-                  ? `${cat.color} text-white shadow-2xl translate-x-1` 
-                  : 'hover:bg-white/10 text-white/70'
+                  ? `active-pill text-slate-900 translate-x-1` 
+                  : 'hover:bg-white/70 text-slate-700'
                 }`}
             >
-              <div className="flex items-center gap-4">
-                <span className="text-2xl">{cat.icon}</span>
-                <span className="font-bold tracking-tight">{cat.name}</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-xl leading-none">{cat.icon}</span>
+                <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">{cat.name}</span>
               </div>
               <button 
                 onClick={(e) => handleDeleteCategory(cat.id, e)}
-                className={`p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity ${activeCategoryId === cat.id ? 'hover:bg-white/20' : 'hover:bg-rose-50 hover:text-rose-500'}`}
+                className="p-2 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-50 hover:text-rose-600"
               >
                 <TrashIcon className="w-4 h-4" />
               </button>
@@ -1213,83 +1355,83 @@ const App: React.FC = () => {
           ))}
           <button 
             onClick={() => setIsCategoryModalOpen(true)}
-            className="w-full mt-6 py-4 border-2 border-dashed border-white/10 rounded-2xl text-white/60 hover:border-indigo-400 hover:text-white transition-all flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest bg-white/5 hover:bg-white/10"
+            className="w-full mt-6 py-4 border-2 border-dashed border-slate-300/70 rounded-3xl text-slate-600 hover:border-indigo-400 transition-all flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest bg-white/70 hover:bg-white btn-glow tap-scale"
           >
             <PlusIcon className="w-4 h-4" /> Yeni Kategori
           </button>
           <div
             onClick={() => setActiveSection('rentals')}
-            className={`mt-6 flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
-              activeSection === 'rentals' ? 'bg-emerald-500 text-white shadow-2xl translate-x-1' : 'hover:bg-white/10 text-white/70'
+            className={`mt-6 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${
+              activeSection === 'rentals' ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
             }`}
           >
-            <div className="flex items-center gap-4">
-              <span className="text-2xl">🏠</span>
-              <span className="font-bold tracking-tight">Kiralar</span>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xl leading-none">🏠</span>
+              <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Kiralar</span>
             </div>
           </div>
           <div
             onClick={() => setActiveSection('assets')}
-            className={`mt-3 flex items-center justify-between p-4 rounded-2xl cursor-pointer transition-all duration-300 ${
-              activeSection === 'assets' ? 'bg-sky-500 text-white shadow-2xl translate-x-1' : 'hover:bg-white/10 text-white/70'
+            className={`mt-3 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${
+              activeSection === 'assets' ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
             }`}
           >
-            <div className="flex items-center gap-4">
-              <span className="text-2xl">🧰</span>
-              <span className="font-bold tracking-tight">Demirbaşlar</span>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xl leading-none">🧰</span>
+              <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Stok</span>
             </div>
           </div>
         </nav>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 p-6 pb-32 md:pb-12 md:p-12 overflow-y-auto custom-scrollbar">
+      <main className="flex-1 p-6 pb-28 lg:pb-12 lg:p-12 overflow-y-auto custom-scrollbar">
         {activeSection === 'home' ? (
           <div className="max-w-4xl mx-auto space-y-10">
             <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 header-glass p-8 rounded-[2.5rem]">
-              <div className="flex items-center gap-8">
-                <div className="text-6xl p-7 rounded-[2.2rem] bg-gradient-to-br from-violet-600 to-blue-500 text-white shadow-2xl shadow-indigo-900/40 transform -rotate-2 float-slow">
+              <div className="flex items-center gap-2 md:gap-4">
+                <div className="text-6xl p-7 rounded-[2.2rem] bg-gradient-to-br from-violet-600 to-blue-500 text-white shadow-2xl shadow-indigo-200/60 transform -rotate-2 float-slow">
                   ✨
                 </div>
                 <div>
-                  <h2 className="text-4xl md:text-5xl font-black text-white tracking-tighter">Anasayfa</h2>
+                  <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">Anasayfa</h2>
                   <div className="flex items-center gap-2 mt-2">
-                    <div className="w-2 h-2 rounded-full bg-slate-900 animate-pulse" />
-                    <p className="text-white/60 font-black text-[10px] uppercase tracking-[0.2em]">
+                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <p className="text-slate-600 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
                       {homeStats.active} aktif · {homeStats.completed} tamamlanan · {homeStats.expired} geciken
                     </p>
                   </div>
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-nowrap md:flex-wrap items-center gap-2 overflow-x-auto md:overflow-visible custom-scrollbar">
                 <button
                   onClick={() => setHomeFilterStatus('active')}
-                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                    homeFilterStatus === 'active' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
+                  className={`shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                    homeFilterStatus === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
                   }`}
                 >
                   Aktif
                 </button>
                 <button
                   onClick={() => setHomeFilterStatus('completed')}
-                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                    homeFilterStatus === 'completed' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
+                  className={`shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                    homeFilterStatus === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
                   }`}
                 >
                   Tamamlanan
                 </button>
                 <button
                   onClick={() => setHomeFilterStatus('expired')}
-                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                    homeFilterStatus === 'expired' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
+                  className={`shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                    homeFilterStatus === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
                   }`}
                 >
                   Geciken
                 </button>
                 <button
                   onClick={() => setHomeFilterStatus('all')}
-                  className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                    homeFilterStatus === 'all' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'
+                  className={`shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                    homeFilterStatus === 'all' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
                   }`}
                 >
                   Tümü
@@ -1297,30 +1439,36 @@ const App: React.FC = () => {
               </div>
             </header>
 
+            {/* Floating-label filter panel (no extra state) */}
             <div className="card-glass rounded-[2.5rem] p-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="text-[10px] font-black text-white/50 uppercase tracking-widest mb-2 block">Kategori</label>
+                <div className="relative">
                   <select
                     value={homeFilterCategory}
                     onChange={(e) => setHomeFilterCategory(e.target.value)}
-                    className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/20 focus:border-indigo-400 font-bold text-white/80"
+                    className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
                   >
                     <option value="all">Tümü</option>
                     {categories.map(cat => (
                       <option key={cat.id} value={cat.id}>{cat.name}</option>
                     ))}
                   </select>
+                  <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    Kategori
+                  </label>
                 </div>
-                <div className="md:col-span-2">
-                  <label className="text-[10px] font-black text-white/50 uppercase tracking-widest mb-2 block">Arama</label>
+
+                <div className="relative md:col-span-2">
                   <input
                     type="text"
                     value={homeFilterText}
                     onChange={(e) => setHomeFilterText(e.target.value)}
-                    placeholder="Görev adıyla ara"
-                    className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/20 focus:border-indigo-400 font-bold text-white/80"
+                    placeholder=" "
+                    className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
                   />
+                  <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    Görev adıyla ara
+                  </label>
                 </div>
               </div>
             </div>
@@ -1329,30 +1477,58 @@ const App: React.FC = () => {
               {homeTasks.map(task => {
                 const category = categories.find(c => c.id === task.categoryId);
                 const statusLabel = task.isExpired ? 'Geciken' : task.isCompleted ? 'Tamamlandı' : 'Aktif';
+                const remainingMs = task.dueAt ? task.dueAt - nowTs : 0;
+                const totalMs = task.dueAt && task.createdAt ? Math.max(1, task.dueAt - task.createdAt) : 1;
+                const progressPct = task.dueAt ? Math.min(100, Math.max(0, (remainingMs / totalMs) * 100)) : 0;
                 return (
                   <div
                     key={task.id}
-                    className={`group flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 card-glass rounded-[2.5rem] transition-all duration-300 ${
-                      task.isExpired ? 'ring-2 ring-rose-400/40' : task.isCompleted ? 'opacity-70' : 'hover:-translate-y-1'
+                    className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${
+                      task.isExpired ? 'ring-2 ring-rose-300/60' : task.isCompleted ? 'opacity-70' : ''
                     }`}
                   >
-                    <div className="flex items-center gap-6">
-                      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${category?.color || 'bg-slate-400'} text-white`}>
+                    {/* Left color bar */}
+                    <div className={`absolute left-0 top-0 bottom-0 w-2 ${category?.color || 'bg-slate-300'} opacity-90`} />
+
+                    <div className="flex items-center gap-5">
+                      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${category?.color || 'bg-slate-300'} text-white shadow-md shadow-slate-200`}>
                         {category?.icon || '📌'}
                       </div>
-                      <div>
-                        <div className="text-2xl font-black text-white tracking-tight">
+                      <div className="min-w-0">
+                        <div className="text-2xl font-black text-slate-900 tracking-tight truncate">
                           {task.title}
                         </div>
-                        <div className="text-sm font-bold text-white/60">
+                        <div className="text-sm font-bold text-slate-500 truncate">
                           {category?.name || 'Kategori Yok'}
                         </div>
-                        <div className="text-[10px] font-black uppercase tracking-widest text-white/40 mt-2">
-                          Durum: {statusLabel}
+
+                        {/* Status + remaining */}
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${
+                            task.isExpired
+                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                              : task.isCompleted
+                                ? 'bg-slate-100 text-slate-600 border-slate-200'
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          }`}>
+                            {statusLabel}
+                          </span>
+
+                          {task.dueAt && !task.isCompleted && !task.isExpired && (
+                            <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
+                              Kalan: {formatRemaining(task.dueAt - nowTs)}
+                            </span>
+                          )}
                         </div>
+
                         {task.dueAt && !task.isCompleted && !task.isExpired && (
-                          <div className="text-xs font-black uppercase tracking-widest text-amber-500 mt-2">
-                            Kalan: {formatRemaining(task.dueAt - nowTs)}
+                          <div className="mt-3">
+                            <div className="h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
+                              <div
+                                className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500"
+                                style={{ width: `${progressPct}%` }}
+                              />
+                            </div>
                           </div>
                         )}
                       </div>
@@ -1362,10 +1538,10 @@ const App: React.FC = () => {
               })}
 
               {homeTasks.length === 0 && (
-                <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-white/10">
-                  <div className="text-8xl mb-8 opacity-40">✨</div>
-                  <h3 className="text-3xl font-black text-white/60 tracking-tighter">BUGÜN İŞ YOK</h3>
-                  <p className="text-white/40 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
+                  <div className="text-8xl mb-8 opacity-60 float-slow">✨</div>
+                  <h3 className="text-3xl font-black text-slate-700 tracking-tighter">BUGÜN İŞ YOK</h3>
+                  <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
                     Filtreyi değiştirerek diğer görevleri görebilirsin.
                   </p>
                 </div>
@@ -1375,48 +1551,98 @@ const App: React.FC = () => {
         ) : activeSection === 'tasks' ? (
           activeCategory ? (
             <div className="max-w-4xl mx-auto space-y-10">
-            <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 header-glass p-8 rounded-[2.5rem]">
-              <div className="flex items-center gap-8">
-                <div className={`text-6xl p-7 rounded-[2.2rem] ${activeCategory.color} text-white shadow-2xl shadow-indigo-900/40 transform -rotate-2 float-slow`}>
-                    {activeCategory.icon}
-                </div>
-                <div>
-                   <h2 className="text-4xl md:text-5xl font-black text-white tracking-tighter">{activeCategory.name}</h2>
-                   <div className="flex items-center gap-2 mt-2">
-                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <p className="text-white/60 font-black text-[10px] uppercase tracking-[0.2em]">
-                        {taskView === 'active' ? activeTasks.length : taskView === 'completed' ? completedTasks.length : expiredTasks.length} {taskView === 'active' ? 'Aktif Görev' : taskView === 'completed' ? 'Tamamlanan Görev' : 'Yapılmayan Görev'}
-                      </p>
-                   </div>
-                </div>
+            <header className="relative overflow-hidden header-glass p-8 rounded-[2.5rem]">
+              <div className="absolute inset-0 pointer-events-none">
+                <div className={`absolute -top-16 -left-16 h-56 w-56 rounded-full ${activeCategory.color} opacity-20 blur-3xl`} />
+                <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setTaskView('active')}
-                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}
-                >
-                  Aktif
-                </button>
-                <button
-                  onClick={() => setTaskView('completed')}
-                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}
-                >
-                  Tamamlanan
-                </button>
-                <button
-                  onClick={() => setTaskView('expired')}
-                  className={`px-5 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white' : 'bg-white/10 text-white/60 hover:bg-white/20'}`}
-                >
-                  Yapılmayan
-                </button>
-              </div>
+
+              <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div className="flex items-center gap-2 md:gap-4">
+                  <div className={`text-6xl p-7 rounded-[2.2rem] ${activeCategory.color} text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow`}>
+                      {activeCategory.icon}
+                  </div>
+                  <div>
+                     <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">{activeCategory.name}</h2>
+                     <div className="flex items-center gap-2 mt-2">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <p className="text-slate-600 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
+                          {taskView === 'active' ? activeTasks.length : taskView === 'completed' ? completedTasks.length : expiredTasks.length} {taskView === 'active' ? 'Aktif Görev' : taskView === 'completed' ? 'Tamamlanan Görev' : 'Yapılmayan Görev'}
+                        </p>
+                     </div>
+                  </div>
+                </div>
+
+                {/* Desktop add button (mobile uses FAB) */}
               <button 
-                onClick={() => { setIsTaskModalOpen(true); setAiSuggestions([]); setSelectedAuditOptions([]); }}
-                className="group flex items-center gap-4 px-10 py-6 btn-accent text-white rounded-[2rem] font-black hover:opacity-90 transition-all tap-scale shadow-indigo-300"
-              >
-                <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" /> 
-                GÖREV EKLE
-              </button>
+                onClick={() => openCreateTaskModal(activeCategoryId)}
+                  className="hidden md:flex group items-center gap-4 px-10 py-6 btn-accent btn-glow text-white rounded-[2rem] font-black hover:opacity-95 transition-all tap-scale"
+                >
+                  <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" /> 
+                  GÖREV EKLE
+                </button>
+              </div>
+
+              {/* Segmented control (sticky on mobile) */}
+              <div className="relative mt-6 md:mt-8">
+                <div className="md:hidden sticky top-3 z-20">
+                  <div className="mx-auto max-w-[520px] bg-white/80 border border-slate-200/70 rounded-full p-1 shadow-lg shadow-slate-200/70 backdrop-blur-xl">
+                    <div className="grid grid-cols-3 gap-1">
+                      <button
+                        onClick={() => setTaskView('active')}
+                        className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                          taskView === 'active' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                        }`}
+                      >
+                        Aktif
+                      </button>
+                      <button
+                        onClick={() => setTaskView('completed')}
+                        className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                          taskView === 'completed' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                        }`}
+                      >
+                        Tamamlanan
+                      </button>
+                      <button
+                        onClick={() => setTaskView('expired')}
+                        className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                          taskView === 'expired' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                        }`}
+                      >
+                        Yapılmayan
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="hidden md:flex items-center gap-2">
+                  <button
+                    onClick={() => setTaskView('active')}
+                    className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                      taskView === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                    }`}
+                  >
+                    Aktif
+                  </button>
+                  <button
+                    onClick={() => setTaskView('completed')}
+                    className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                      taskView === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                    }`}
+                  >
+                    Tamamlanan
+                  </button>
+                  <button
+                    onClick={() => setTaskView('expired')}
+                    className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                      taskView === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                    }`}
+                  >
+                    Yapılmayan
+                  </button>
+                </div>
+              </div>
             </header>
 
             <div className="space-y-4">
@@ -1433,52 +1659,74 @@ const App: React.FC = () => {
                       }
                     }
                   }}
-                  className={`group flex flex-col md:flex-row md:items-center gap-6 justify-between p-6 md:p-8 card-glass rounded-[2.5rem] transition-all duration-300 ${task.isCompleted ? 'opacity-30 grayscale' : 'hover:-translate-y-1'}`}
+                  className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center gap-6 justify-between p-6 md:p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${
+                    task.isCompleted ? 'opacity-50 grayscale' : ''
+                  }`}
                 >
+                  {/* Left category bar */}
+                  <div className={`absolute left-0 top-0 bottom-0 w-2 ${activeCategory?.color || 'bg-slate-300'} opacity-80`} />
+
                   <div className="flex items-start md:items-center gap-5 md:gap-8 flex-1">
                     <button 
                       onClick={(e) => { e.stopPropagation(); if (!task.isExpired) toggleTask(task.id); }} 
                       disabled={task.isExpired}
-                      className={`w-14 h-14 md:w-12 md:h-12 rounded-2xl border-2 flex items-center justify-center transition-all duration-500 touch-manipulation ${task.isCompleted ? 'bg-indigo-600 border-indigo-600 text-white rotate-[360deg]' : 'border-slate-100 hover:border-indigo-500 bg-slate-50'}`}
+                      className={`w-14 h-14 md:w-12 md:h-12 rounded-2xl border flex items-center justify-center transition-all duration-300 touch-manipulation ${
+                        task.isExpired
+                          ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                          : task.isCompleted
+                            ? 'bg-indigo-600 border-indigo-600 text-white'
+                            : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-400 hover:shadow-lg hover:shadow-indigo-100'
+                      }`}
                     >
                       {task.isCompleted && <CheckIcon className="w-8 h-8 stroke-[4px]" />}
                     </button>
                     <div className="flex flex-col gap-2">
-                      <span className={`text-2xl font-black text-white tracking-tight transition-all ${task.isCompleted ? 'line-through opacity-50' : ''}`}>
+                      <span className={`text-2xl font-black text-slate-900 tracking-tight transition-all ${task.isCompleted ? 'line-through opacity-60' : ''}`}>
                         {task.title}
                       </span>
-                      <span className="text-xs font-bold text-white/50 uppercase tracking-widest">
+                      <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
                         Ekleyen: {users.find(u => u.id === task.createdByUserId)?.name || 'Bilinmiyor'} · Atanan: {users.find(u => u.id === task.assignedToUserId)?.name || 'Bilinmiyor'} · Süre: {task.expectedDuration || '00:00'} · {task.repeat === 'daily' ? 'Her gün' : 'Tek sefer'}
                       </span>
                       {task.auditItems && task.auditItems.length > 0 && (
-                        <span className="text-xs font-black text-white/50 uppercase tracking-widest">
+                        <span className="text-xs font-black text-slate-500 uppercase tracking-widest">
                           Denetim: {task.auditItems.length} seçenek
                         </span>
                       )}
-                      {task.requiresPhoto && (
-                        <span className="text-xs font-black text-cyan-300 uppercase tracking-widest">
-                          Fotoğraf zorunlu
-                        </span>
-                      )}
-                      {task.completionPhotoDataUrl && (
-                        <span className="text-xs font-black text-emerald-300 uppercase tracking-widest">
-                          Fotoğraf eklendi
-                        </span>
-                      )}
-                      {task.auditResults && task.auditResults.some(result => result.status === 'fail') && (
-                        <span className="text-xs font-black text-rose-300 uppercase tracking-widest">
-                          Eksikler var (fotoğraflar mevcut)
-                        </span>
-                      )}
+
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        {task.requiresPhoto && (
+                          <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-cyan-50 text-cyan-700 border border-cyan-200">
+                            Fotoğraf zorunlu
+                          </span>
+                        )}
+                        {task.completionPhotoDataUrl && (
+                          <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            Fotoğraf eklendi
+                          </span>
+                        )}
+                        {task.auditResults && task.auditResults.some(result => result.status === 'fail') && (
+                          <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
+                            Eksikler var
+                          </span>
+                        )}
+                        {task.isExpired && (
+                          <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
+                            Süresi geçti
+                          </span>
+                        )}
+                      </div>
+
                       {task.dueAt && !task.isCompleted && !task.isExpired && (
-                        <span className="text-xs font-black text-amber-300 uppercase tracking-widest">
-                          Geri sayım: {formatRemaining(task.dueAt - nowTs)}
-                        </span>
-                      )}
-                      {task.isExpired && (
-                        <span className="text-xs font-black text-rose-300 uppercase tracking-widest">
-                          Süresi geçti
-                        </span>
+                        <div className="mt-2">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
+                              Geri sayım: {formatRemaining(task.dueAt - nowTs)}
+                            </span>
+                          </div>
+                          <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
+                            <div className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500 w-[65%] animate-pulse" />
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -1503,10 +1751,21 @@ const App: React.FC = () => {
                       Süreyi Uzat
                     </button>
                   )}
+                  {!task.isExpired && !task.isCompleted && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openEditTaskModal(task.id); }}
+                      className="px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white transition-all tap-scale"
+                    >
+                      Düzenle
+                    </button>
+                  )}
+
                   <button 
                     onClick={(e) => { e.stopPropagation(); deleteTask(task.id, e); }}
                     disabled={!isAdmin}
-                    className={`p-3 rounded-2xl transition-all opacity-0 group-hover:opacity-100 ${!isAdmin ? 'text-slate-200 cursor-not-allowed' : 'text-slate-200 hover:text-rose-500 hover:bg-rose-50'}`}
+                    className={`p-3 rounded-2xl transition-all opacity-0 group-hover:opacity-100 ${
+                      !isAdmin ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                    }`}
                   >
                     <TrashIcon className="w-6 h-6" />
                   </button>
@@ -1514,12 +1773,12 @@ const App: React.FC = () => {
                 </div>
               ))}
               {visibleTasks.length === 0 && (
-                <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-white/10">
-                  <div className="text-8xl mb-8 opacity-40">✨</div>
-                  <h3 className="text-3xl font-black text-white/60 tracking-tighter">
+                <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
+                  <div className="text-8xl mb-8 opacity-60 float-slow">✨</div>
+                  <h3 className="text-3xl font-black text-slate-700 tracking-tighter">
                     {taskView === 'active' ? 'HER ŞEY YOLUNDA!' : taskView === 'completed' ? 'TAMAMLANAN YOK' : 'YAPILMAYAN YOK'}
                   </h3>
-                  <p className="text-white/40 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                  <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
                     {taskView === 'active' ? 'Bugünlük planların bitti.' : taskView === 'completed' ? 'Henüz tamamlanan görev yok.' : 'Süresi geçen görev yok.'}
                   </p>
                 </div>
@@ -1527,25 +1786,303 @@ const App: React.FC = () => {
             </div>
             </div>
           ) : (
-            <div className="h-full flex flex-col items-center justify-center text-slate-300">
-              <div className="w-32 h-32 bg-slate-100 rounded-[3rem] flex items-center justify-center mb-8">
-                <PlusIcon className="w-12 h-12" />
+            <div className="max-w-4xl mx-auto space-y-10">
+              <header className="relative overflow-hidden header-glass p-8 rounded-[2.5rem]">
+                <div className="absolute inset-0 pointer-events-none">
+                  <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
+                  <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-fuchsia-500/10 blur-3xl" />
+                </div>
+
+                <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
+                  <div className="flex items-center gap-2 md:gap-4">
+                    <div className="text-6xl p-7 rounded-[2.2rem] bg-gradient-to-br from-indigo-600 to-blue-500 text-white shadow-2xl shadow-indigo-200/60 transform -rotate-2 float-slow">
+                      📝
+                    </div>
+                    <div>
+                      <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">Görevler</h2>
+                      <div className="flex items-center gap-2 mt-2">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <p className="text-slate-600 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
+                          {tasksAllFiltered.length} kayıt · {tasksAllFilterCategory === 'all' ? 'Tüm kategoriler' : (categories.find(c => c.id === tasksAllFilterCategory)?.name || 'Kategori')}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Desktop add button (mobile uses FAB) */}
+                  <button
+                    onClick={() => openCreateTaskModal(tasksAllFilterCategory !== 'all' ? tasksAllFilterCategory : null)}
+                    className="hidden md:flex group items-center gap-4 px-10 py-6 btn-accent btn-glow text-white rounded-[2rem] font-black hover:opacity-95 transition-all tap-scale"
+                  >
+                    <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
+                    GÖREV EKLE
+                  </button>
+                </div>
+
+                {/* Segmented control */}
+                <div className="relative mt-6 md:mt-8">
+                  <div className="md:hidden sticky top-3 z-20">
+                    <div className="mx-auto max-w-[520px] bg-white/80 border border-slate-200/70 rounded-full p-1 shadow-lg shadow-slate-200/70 backdrop-blur-xl">
+                      <div className="grid grid-cols-3 gap-1">
+                        <button
+                          onClick={() => setTaskView('active')}
+                          className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                            taskView === 'active' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                          }`}
+                        >
+                          Aktif
+                        </button>
+                        <button
+                          onClick={() => setTaskView('completed')}
+                          className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                            taskView === 'completed' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                          }`}
+                        >
+                          Tamamlanan
+                        </button>
+                        <button
+                          onClick={() => setTaskView('expired')}
+                          className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                            taskView === 'expired' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                          }`}
+                        >
+                          Yapılmayan
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="hidden md:flex items-center gap-2">
+                    <button
+                      onClick={() => setTaskView('active')}
+                      className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                        taskView === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                      }`}
+                    >
+                      Aktif
+                    </button>
+                    <button
+                      onClick={() => setTaskView('completed')}
+                      className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                        taskView === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                      }`}
+                    >
+                      Tamamlanan
+                    </button>
+                    <button
+                      onClick={() => setTaskView('expired')}
+                      className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                        taskView === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                      }`}
+                    >
+                      Yapılmayan
+                    </button>
+                  </div>
+                </div>
+              </header>
+
+              {/* Filters */}
+              <div className="card-glass rounded-[2.5rem] p-6">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="relative">
+                    <select
+                      value={tasksAllFilterCategory}
+                      onChange={(e) => setTasksAllFilterCategory(e.target.value)}
+                      className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
+                    >
+                      <option value="all">Tüm Kategoriler</option>
+                      {categories.map(cat => (
+                        <option key={cat.id} value={cat.id}>{cat.name}</option>
+                      ))}
+                    </select>
+                    <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                      Kategori
+                    </label>
+                  </div>
+
+                  <div className="relative md:col-span-2">
+                    <input
+                      type="text"
+                      value={tasksAllFilterText}
+                      onChange={(e) => setTasksAllFilterText(e.target.value)}
+                      placeholder=" "
+                      className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
+                    />
+                    <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                      Görev adıyla ara
+                    </label>
+                  </div>
+                </div>
               </div>
-              <p className="text-2xl font-black uppercase tracking-widest opacity-40">Bir Kategori Seçin</p>
+
+              <div className="space-y-4">
+                {tasksAllFiltered.map(task => {
+                  const taskCategory = categories.find(c => c.id === task.categoryId);
+                  const isTaskAudit = taskCategory?.name === 'Denetim';
+                  return (
+                    <div
+                      key={task.id}
+                      onClick={() => {
+                        if (isTaskAudit) {
+                          if (task.isCompleted && task.auditResults?.some(result => result.status === 'fail')) {
+                            setActiveAuditReviewTaskId(task.id);
+                            setIsAuditReviewOpen(true);
+                          } else {
+                            openAuditModal(task.id);
+                          }
+                        }
+                      }}
+                      className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center gap-6 justify-between p-6 md:p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${
+                        task.isCompleted ? 'opacity-50 grayscale' : ''
+                      }`}
+                    >
+                      {/* Left category bar */}
+                      <div className={`absolute left-0 top-0 bottom-0 w-2 ${taskCategory?.color || 'bg-slate-300'} opacity-80`} />
+
+                      <div className="flex items-start md:items-center gap-5 md:gap-8 flex-1">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); if (!task.isExpired) toggleTask(task.id); }}
+                          disabled={task.isExpired}
+                          className={`w-14 h-14 md:w-12 md:h-12 rounded-2xl border flex items-center justify-center transition-all duration-300 touch-manipulation ${
+                            task.isExpired
+                              ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                              : task.isCompleted
+                                ? 'bg-indigo-600 border-indigo-600 text-white'
+                                : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-400 hover:shadow-lg hover:shadow-indigo-100'
+                          }`}
+                        >
+                          {task.isCompleted && <CheckIcon className="w-8 h-8 stroke-[4px]" />}
+                        </button>
+                        <div className="flex flex-col gap-2 min-w-0">
+                          <span className={`text-2xl font-black text-slate-900 tracking-tight transition-all truncate ${task.isCompleted ? 'line-through opacity-60' : ''}`}>
+                            {task.title}
+                          </span>
+                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">
+                            {taskCategory ? `${taskCategory.icon} ${taskCategory.name}` : 'Kategori Yok'}
+                          </span>
+                          <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                            Ekleyen: {users.find(u => u.id === task.createdByUserId)?.name || 'Bilinmiyor'} · Atanan: {users.find(u => u.id === task.assignedToUserId)?.name || 'Bilinmiyor'} · Süre: {task.expectedDuration || '00:00'} · {task.repeat === 'daily' ? 'Her gün' : 'Tek sefer'}
+                          </span>
+
+                          {task.auditItems && task.auditItems.length > 0 && (
+                            <span className="text-xs font-black text-slate-500 uppercase tracking-widest">
+                              Denetim: {task.auditItems.length} seçenek
+                            </span>
+                          )}
+
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            {task.requiresPhoto && (
+                              <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-cyan-50 text-cyan-700 border border-cyan-200">
+                                Fotoğraf zorunlu
+                              </span>
+                            )}
+                            {task.completionPhotoDataUrl && (
+                              <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                Fotoğraf eklendi
+                              </span>
+                            )}
+                            {task.auditResults && task.auditResults.some(result => result.status === 'fail') && (
+                              <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
+                                Eksikler var
+                              </span>
+                            )}
+                            {task.isExpired && (
+                              <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
+                                Süresi geçti
+                              </span>
+                            )}
+                          </div>
+
+                          {task.dueAt && !task.isCompleted && !task.isExpired && (
+                            <div className="mt-2">
+                              <div className="flex items-center justify-between gap-3">
+                                <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
+                                  Geri sayım: {formatRemaining(task.dueAt - nowTs)}
+                                </span>
+                              </div>
+                              <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
+                                <div className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500 w-[65%] animate-pulse" />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3 md:gap-4 justify-end">
+                        {task.isCompleted && task.auditResults?.some(result => result.status === 'fail') && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveAuditReviewTaskId(task.id);
+                              setIsAuditReviewOpen(true);
+                            }}
+                            className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all"
+                          >
+                            Fotoğrafları Gör
+                          </button>
+                        )}
+                        {task.isExpired && currentUser?.role === 'admin' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleExtendTask(task.id); }}
+                            className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-amber-50 text-amber-700 hover:bg-amber-100 transition-all"
+                          >
+                            Süreyi Uzat
+                          </button>
+                        )}
+                        {!task.isExpired && !task.isCompleted && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openEditTaskModal(task.id); }}
+                            className="px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white transition-all tap-scale"
+                          >
+                            Düzenle
+                          </button>
+                        )}
+
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteTask(task.id, e); }}
+                          disabled={!isAdmin}
+                          className={`p-3 rounded-2xl transition-all opacity-0 group-hover:opacity-100 ${
+                            !isAdmin ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                          }`}
+                        >
+                          <TrashIcon className="w-6 h-6" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {tasksAllFiltered.length === 0 && (
+                  <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
+                    <div className="text-8xl mb-8 opacity-60 float-slow">📝</div>
+                    <h3 className="text-3xl font-black text-slate-700 tracking-tighter">
+                      {taskView === 'active' ? 'AKTİF GÖREV YOK' : taskView === 'completed' ? 'TAMAMLANAN YOK' : 'YAPILMAYAN YOK'}
+                    </h3>
+                    <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                      Filtreyi değiştirerek diğer görevleri görebilirsin.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           )
         ) : activeSection === 'rentals' ? (
           <div className="max-w-4xl mx-auto space-y-10">
-            <header className="flex flex-col md:flex-row md:items-center justify-between gap-8 bg-gradient-to-br from-white via-white to-emerald-50/80 p-10 rounded-[3rem] shadow-2xl border border-white/70">
-              <div className="flex items-center gap-8">
+            <header className="relative overflow-hidden header-glass p-10 rounded-[3rem]">
+              <div className="absolute inset-0 pointer-events-none">
+                <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-emerald-500/10 blur-3xl" />
+                <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-cyan-500/10 blur-3xl" />
+              </div>
+              <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-8">
+              <div className="flex items-center gap-2 md:gap-4">
                 <div className="text-6xl p-8 rounded-[2.5rem] bg-emerald-500 text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow">
                   🏠
                 </div>
                 <div>
-                  <h2 className="text-5xl font-black text-slate-800 tracking-tighter">Kiralar</h2>
+                  <h2 className="text-4xl font-black text-slate-800 tracking-tighter">Kiralar</h2>
                   <div className="flex items-center gap-2 mt-2">
                     <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                    <p className="text-slate-400 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
                       {rentalsWithStatus.length} kayıt
                     </p>
                   </div>
@@ -1553,11 +2090,12 @@ const App: React.FC = () => {
               </div>
               <button
                 onClick={() => setIsRentalModalOpen(true)}
-                className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-90 transition-all active:scale-95 shadow-emerald-300"
+                className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-95 transition-all active:scale-95 shadow-emerald-200 btn-glow"
               >
                 <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
                 KİRA EKLE
               </button>
+              </div>
             </header>
 
             <div className="space-y-4">
@@ -1566,15 +2104,23 @@ const App: React.FC = () => {
                 return (
                   <div
                     key={rental.id}
-                    className={`group flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg transition-all duration-300 ${
-                      isOverdue ? 'ring-2 ring-rose-300/60' : 'hover:shadow-2xl hover:border-emerald-200 hover:-translate-y-1'
+                    className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${
+                      isOverdue ? 'ring-2 ring-rose-300/60' : ''
                     }`}
                   >
+                    {/* left accent */}
+                    <div className={`absolute left-0 top-0 bottom-0 w-2 ${rental.isPaidForMonth ? 'bg-emerald-500' : isOverdue ? 'bg-rose-500' : 'bg-amber-500'} opacity-80`} />
+
                     <div className="flex items-center gap-6">
-                      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${
-                        rental.isPaidForMonth ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'
-                      }`}>
-                        {rental.isPaidForMonth ? '✅' : '⏳'}
+                      <div className="relative">
+                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${
+                          rental.isPaidForMonth ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-amber-100 text-amber-700 border border-amber-200'
+                        }`}>
+                          {rental.isPaidForMonth ? '✅' : '⏳'}
+                        </div>
+                        {isOverdue && (
+                          <div className="absolute -inset-1 rounded-[1.2rem] ring-2 ring-rose-300/70 animate-pulse" />
+                        )}
                       </div>
                       <div>
                         <div className="text-2xl font-black text-slate-800 tracking-tight">
@@ -1587,7 +2133,7 @@ const App: React.FC = () => {
                           Kira günü: {rental.dueDay} · Tutar: {formatCurrency(rental.amount)}
                         </div>
                         {isOverdue && (
-                          <div className="text-xs font-black uppercase tracking-widest text-rose-500 mt-2">
+                          <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-black uppercase tracking-widest">
                             {rental.overdueDays} gün gecikmede
                           </div>
                         )}
@@ -1596,9 +2142,9 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-3">
                       <button
                         onClick={() => toggleRentalPaid(rental.id)}
-                        className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${
+                        className={`px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all tap-scale ${
                           rental.isPaidForMonth
-                            ? 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                            ? 'bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white'
                             : 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-200'
                         }`}
                       >
@@ -1606,7 +2152,7 @@ const App: React.FC = () => {
                       </button>
                       <button
                         onClick={() => deleteRental(rental.id)}
-                        className="p-3 rounded-2xl text-slate-300 hover:text-rose-500 hover:bg-rose-50 transition-all"
+                        className="p-3 rounded-2xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all"
                         title="Sil"
                       >
                         <TrashIcon className="w-6 h-6" />
@@ -1617,10 +2163,10 @@ const App: React.FC = () => {
               })}
 
               {rentalsWithStatus.length === 0 && (
-                <div className="text-center py-44 bg-white/70 rounded-[4rem] border-2 border-dashed border-white/70 shadow-xl">
-                  <div className="text-8xl mb-8 opacity-40">🏠</div>
-                  <h3 className="text-3xl font-black text-slate-400 tracking-tighter">KİRA KAYDI YOK</h3>
-                  <p className="text-slate-400 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                <div className="text-center py-44 card-glass rounded-[4rem] border-2 border-dashed border-slate-200/70">
+                  <div className="text-8xl mb-8 opacity-60 float-slow">🏠</div>
+                  <h3 className="text-3xl font-black text-slate-700 tracking-tighter">KİRA KAYDI YOK</h3>
+                  <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
                     İlk kira kaydını ekleyin.
                   </p>
                 </div>
@@ -1629,16 +2175,21 @@ const App: React.FC = () => {
           </div>
         ) : (
           <div className="max-w-4xl mx-auto space-y-10">
-            <header className="flex flex-col md:flex-row md:items-center justify-between gap-8 bg-gradient-to-br from-white via-white to-sky-50/80 p-10 rounded-[3rem] shadow-2xl border border-white/70">
-              <div className="flex items-center gap-8">
+            <header className="relative overflow-hidden header-glass p-10 rounded-[3rem]">
+              <div className="absolute inset-0 pointer-events-none">
+                <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-sky-500/10 blur-3xl" />
+                <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
+              </div>
+              <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-8">
+              <div className="flex items-center gap-2 md:gap-4">
                 <div className="text-6xl p-8 rounded-[2.5rem] bg-sky-500 text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow">
                   🧰
                 </div>
                 <div>
-                  <h2 className="text-5xl font-black text-slate-800 tracking-tighter">Demirbaşlar</h2>
+                  <h2 className="text-4xl font-black text-slate-800 tracking-tighter">Stok</h2>
                   <div className="flex items-center gap-2 mt-2">
                     <div className="w-2 h-2 rounded-full bg-sky-500 animate-pulse" />
-                    <p className="text-slate-400 font-black text-[10px] uppercase tracking-[0.2em]">
+                    <p className="text-slate-400 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
                       {filteredAssets.length} kayıt
                     </p>
                   </div>
@@ -1646,34 +2197,39 @@ const App: React.FC = () => {
               </div>
               <button
                 onClick={() => setIsAssetModalOpen(true)}
-                className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-sky-500 via-blue-500 to-indigo-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-90 transition-all active:scale-95 shadow-sky-300"
+                className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-sky-500 via-blue-500 to-indigo-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-95 transition-all active:scale-95 shadow-sky-200 btn-glow"
               >
                 <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
-                DEMİRBAŞ EKLE
+                STOK EKLE
               </button>
+              </div>
             </header>
 
-            <div className="bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg p-6">
+            <div className="sticky top-4 z-10 card-glass rounded-[2.5rem] border border-slate-200/70 shadow-lg p-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Oda Filtresi</label>
+                <div className="relative">
                   <input
                     type="text"
                     value={assetFilterRoom}
                     onChange={(e) => setAssetFilterRoom(e.target.value)}
-                    placeholder="Örn: Salon"
-                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
+                    placeholder=" "
+                    className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-500 font-black text-slate-700"
                   />
+                  <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                    Oda filtresi
+                  </label>
                 </div>
-                <div className="md:col-span-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Arama</label>
+                <div className="relative md:col-span-2">
                   <input
                     type="text"
                     value={assetFilterText}
                     onChange={(e) => setAssetFilterText(e.target.value)}
-                    placeholder="Ürün adı veya açıklama"
-                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
+                    placeholder=" "
+                    className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-500 font-black text-slate-700"
                   />
+                  <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                    Arama
+                  </label>
                 </div>
               </div>
             </div>
@@ -1682,24 +2238,27 @@ const App: React.FC = () => {
               {filteredAssets.map(item => (
                 <div
                   key={item.id}
-                  className="group flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 bg-white/85 rounded-[2.5rem] border border-white/70 shadow-lg transition-all duration-300 hover:shadow-2xl hover:border-sky-200 hover:-translate-y-1"
+                  className="group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow"
                 >
+                  <div className="absolute left-0 top-0 bottom-0 w-2 bg-sky-500 opacity-30" />
                   <div className="flex items-center gap-6">
-                    <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl bg-sky-100 text-sky-600">
+                    <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl bg-sky-100 text-sky-700 border border-sky-200">
                       📦
                     </div>
                     <div>
                       <div className="text-2xl font-black text-slate-800 tracking-tight">
                         {item.name}
                       </div>
-                      <div className="text-sm font-bold text-slate-500">
-                        Oda: {item.room}
-                      </div>
-                      <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-2">
-                        Veriliş: {formatDateDisplay(item.assignedAt)}
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-black uppercase tracking-widest">
+                          {item.room}
+                        </span>
+                        <span className="px-3 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-[10px] font-black uppercase tracking-widest">
+                          {formatDateDisplay(item.assignedAt)}
+                        </span>
                       </div>
                       {item.note && (
-                        <div className="text-xs font-black text-slate-500 uppercase tracking-widest mt-2">
+                        <div className="text-xs font-black text-slate-500 uppercase tracking-widest mt-3">
                           {item.note}
                         </div>
                       )}
@@ -1707,7 +2266,7 @@ const App: React.FC = () => {
                   </div>
                   <button
                     onClick={() => deleteAsset(item.id)}
-                    className="p-3 rounded-2xl text-slate-300 hover:text-rose-500 hover:bg-rose-50 transition-all"
+                    className="p-3 rounded-2xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all"
                     title="Sil"
                   >
                     <TrashIcon className="w-6 h-6" />
@@ -1716,11 +2275,11 @@ const App: React.FC = () => {
               ))}
 
               {filteredAssets.length === 0 && (
-                <div className="text-center py-44 bg-white/70 rounded-[4rem] border-2 border-dashed border-white/70 shadow-xl">
-                  <div className="text-8xl mb-8 opacity-40">🧰</div>
-                  <h3 className="text-3xl font-black text-slate-400 tracking-tighter">DEMİRBAŞ YOK</h3>
-                  <p className="text-slate-400 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
-                    İlk demirbaş kaydını ekleyin.
+                <div className="text-center py-44 card-glass rounded-[4rem] border-2 border-dashed border-slate-200/70">
+                  <div className="text-8xl mb-8 opacity-60 float-slow">🧰</div>
+                  <h3 className="text-3xl font-black text-slate-700 tracking-tighter">STOK YOK</h3>
+                  <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                    İlk stok kaydını ekleyin.
                   </p>
                 </div>
               )}
@@ -1729,82 +2288,82 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Mobile Category Bar */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 px-4 pb-4">
-        <div className="nav-glass rounded-[2rem] p-3">
-          <div className="flex items-center gap-2 overflow-x-auto custom-scrollbar">
+      {/* Mobile Tab Bar (no sidebar) */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-50 px-4 pb-4">
+        <div className="tabbar rounded-[2.25rem] px-4 py-3">
+          <div className="grid grid-cols-5 items-center">
             <button
               onClick={() => setActiveSection('home')}
-              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                activeSection === 'home'
-                  ? 'btn-primary text-white'
-                  : 'bg-white/10 text-white/70 border border-white/10'
-              }`}
+              className={`tabbar-item ${activeSection === 'home' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
             >
-              ✨ Anasayfa
+              <div className={`text-xl ${activeSection === 'home' ? 'text-indigo-600' : 'text-slate-500'}`}>✨</div>
+              <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'home' ? 'text-indigo-700' : 'text-slate-500'}`}>Anasayfa</div>
             </button>
+
             <button
-              onClick={() => setIsCategoryModalOpen(true)}
-              className="shrink-0 px-4 py-3 rounded-full btn-accent text-white text-[10px] font-black uppercase tracking-widest tap-scale"
+              onClick={() => {
+                setActiveSection('tasks');
+                setActiveCategoryId(null); // "Tüm Görevler" görünümü
+              }}
+              className={`tabbar-item ${activeSection === 'tasks' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
             >
-              + Kategori
+              <div className={`text-xl ${activeSection === 'tasks' ? 'text-indigo-600' : 'text-slate-500'}`}>📝</div>
+              <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'tasks' ? 'text-indigo-700' : 'text-slate-500'}`}>Görevler</div>
             </button>
-            {categories.map((cat) => {
-              const isActive = activeSection === 'tasks' && cat.id === activeCategoryId;
-              return (
-                <button
-                  key={cat.id}
-                  onClick={() => {
+
+            {/* Context FAB */}
+            <div className="relative flex items-center justify-center">
+              <button
+                onClick={() => {
+                  if (activeSection === 'rentals') {
+                    setIsRentalModalOpen(true);
+                    return;
+                  }
+                  if (activeSection === 'assets') {
+                    setIsAssetModalOpen(true);
+                    return;
+                  }
+                  if (activeSection === 'tasks') {
+                    openCreateTaskModal(activeCategoryId);
+                    return;
+                  }
+                  // home
+                  if (!activeCategoryId && categories.length) {
                     setActiveSection('tasks');
-                    setActiveCategoryId(cat.id);
-                  }}
-                  className={`shrink-0 flex items-center gap-2 px-4 py-3 rounded-full border transition-all tap-scale ${
-                    isActive
-                      ? 'bg-white/15 text-white border-white/20'
-                      : 'bg-white/5 text-white/70 border-white/10'
-                  }`}
-                >
-                  <span className="text-lg leading-none">{cat.icon}</span>
-                  <span className="text-xs font-black uppercase tracking-widest">{cat.name}</span>
-                </button>
-              );
-            })}
+                    setActiveCategoryId(categories[0].id);
+                    openCreateTaskModal(categories[0].id);
+                    return;
+                  }
+                  if (!categories.length) {
+                    setIsCategoryModalOpen(true);
+                    return;
+                  }
+                  setActiveSection('tasks');
+                  openCreateTaskModal(activeCategoryId || categories[0]?.id || null);
+                }}
+                className="relative fab fab-pulse w-14 h-14 rounded-full flex items-center justify-center text-white font-black text-2xl -mt-8 shadow-xl"
+                aria-label="Add"
+                title="Ekle"
+              >
+                +
+              </button>
+            </div>
+
             <button
               onClick={() => setActiveSection('rentals')}
-              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                activeSection === 'rentals'
-                  ? 'bg-emerald-500 text-white shadow-lg'
-                  : 'bg-white/10 text-white/70 border border-white/10'
-              }`}
+              className={`tabbar-item ${activeSection === 'rentals' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
             >
-              🏠 Kiralar
+              <div className={`text-xl ${activeSection === 'rentals' ? 'text-emerald-600' : 'text-slate-500'}`}>🏠</div>
+              <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'rentals' ? 'text-emerald-700' : 'text-slate-500'}`}>Kiralar</div>
             </button>
+
             <button
               onClick={() => setActiveSection('assets')}
-              className={`shrink-0 px-4 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                activeSection === 'assets'
-                  ? 'bg-sky-500 text-white shadow-lg'
-                  : 'bg-white/10 text-white/70 border border-white/10'
-              }`}
+              className={`tabbar-item ${activeSection === 'assets' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
             >
-              🧰 Demirbaşlar
+              <div className={`text-xl ${activeSection === 'assets' ? 'text-sky-600' : 'text-slate-500'}`}>🧰</div>
+              <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'assets' ? 'text-sky-700' : 'text-slate-500'}`}>Stok</div>
             </button>
-            {activeSection === 'rentals' && (
-              <button
-                onClick={() => setIsRentalModalOpen(true)}
-                className="shrink-0 px-4 py-3 rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500 text-white text-[10px] font-black uppercase tracking-widest tap-scale"
-              >
-                + Kira
-              </button>
-            )}
-            {activeSection === 'assets' && (
-              <button
-                onClick={() => setIsAssetModalOpen(true)}
-                className="shrink-0 px-4 py-3 rounded-full bg-gradient-to-r from-sky-500 to-blue-500 text-white text-[10px] font-black uppercase tracking-widest tap-scale"
-              >
-                + Demirbaş
-              </button>
-            )}
           </div>
         </div>
       </div>
@@ -1814,9 +2373,11 @@ const App: React.FC = () => {
 
       {/* Category Create Modal */}
       {isCategoryModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[3.5rem] w-full max-w-md p-12 animate-in zoom-in-95 shadow-2xl">
-            <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">Yeni Kategori</h3>
+        <div className="fixed inset-0 modal-overlay z-[160] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+            <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">
+              {editingCategoryId ? 'Kategoriyi Düzenle' : 'Yeni Kategori'}
+            </h3>
             <div className="space-y-10">
               <div>
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Kategori Adı</label>
@@ -1860,7 +2421,12 @@ const App: React.FC = () => {
 
               <div className="flex gap-6 pt-6">
                 <button onClick={() => setIsCategoryModalOpen(false)} className="flex-1 py-6 font-black text-slate-400 hover:text-slate-600 transition-colors uppercase text-[10px] tracking-widest">Vazgeç</button>
-                <button onClick={handleAddCategory} className="flex-[2] py-6 bg-indigo-600 text-white rounded-[2rem] font-black shadow-2xl hover:bg-indigo-700 active:scale-95 transition-all uppercase text-[10px] tracking-widest">Kategori Oluştur</button>
+                <button
+                  onClick={handleSaveCategory}
+                  className="flex-[2] py-6 bg-indigo-600 text-white rounded-[2rem] font-black shadow-2xl hover:bg-indigo-700 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
+                >
+                  {editingCategoryId ? 'Kaydet' : 'Kategori Oluştur'}
+                </button>
               </div>
             </div>
           </div>
@@ -1869,8 +2435,8 @@ const App: React.FC = () => {
 
       {/* Rental Create Modal */}
       {isRentalModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[3.5rem] w-full max-w-md p-12 animate-in zoom-in-95 shadow-2xl">
+        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
             <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">Yeni Kira</h3>
             <div className="space-y-8">
               <div>
@@ -1937,9 +2503,9 @@ const App: React.FC = () => {
 
       {/* Asset Create Modal */}
       {isAssetModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[3.5rem] w-full max-w-md p-12 animate-in zoom-in-95 shadow-2xl">
-            <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">Yeni Demirbaş</h3>
+        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+            <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">Yeni Stok</h3>
             <div className="space-y-8">
               <div>
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Ürün Adı</label>
@@ -1990,7 +2556,7 @@ const App: React.FC = () => {
                   onClick={handleAddAsset}
                   className="flex-[2] py-5 bg-sky-500 text-white rounded-[2rem] font-black shadow-2xl hover:bg-sky-600 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
                 >
-                  Demirbaş Kaydet
+                  Stok Kaydet
                 </button>
               </div>
             </div>
@@ -1998,43 +2564,82 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Task Create Modal with Gemini AI */}
+      {/* Task Create Modal */}
       {isTaskModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[4rem] w-full max-w-2xl p-12 animate-in zoom-in-95 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar">
+        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-12">
-              <h3 className="text-4xl font-black tracking-tighter text-slate-800">Yeni Görev</h3>
-              <button 
-                onClick={handleFetchSuggestions}
-                disabled={isAIThinking}
-                className="flex items-center gap-3 px-6 py-3.5 bg-indigo-50 text-indigo-600 rounded-2xl text-[10px] font-black hover:bg-indigo-100 transition-all disabled:opacity-50 active:scale-95 uppercase tracking-widest shadow-sm border border-indigo-100"
-              >
-                <SparklesIcon className={`w-5 h-5 ${isAIThinking ? 'animate-spin' : ''}`} />
-                {isAIThinking ? 'Düşünüyor...' : 'Gemini Önerisi Al'}
-              </button>
+              <h3 className="text-4xl font-black tracking-tighter text-slate-800">
+                {editingTaskId ? 'Görevi Düzenle' : 'Yeni Görev'}
+              </h3>
             </div>
 
-            {aiSuggestions.length > 0 && (
-              <div className="mb-12 animate-in slide-in-from-top-6 duration-500">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] px-2 mb-6">Yapay Zeka Önerileri</p>
-                <div className="flex flex-col gap-4">
-                  {aiSuggestions.map((suggestion, idx) => (
-                    <button 
-                      key={idx}
-                      onClick={() => handleAddTask(suggestion)}
-                      className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] text-left text-lg font-bold text-slate-700 hover:border-indigo-500 hover:bg-indigo-50 transition-all flex items-center justify-between group shadow-sm"
-                    >
-                      {suggestion}
-                      <div className="w-10 h-10 bg-white rounded-xl shadow-sm opacity-0 group-hover:opacity-100 flex items-center justify-center text-indigo-600 transition-all">
-                        <PlusIcon className="w-6 h-6" />
-                      </div>
-                    </button>
-                  ))}
+            <div className="space-y-10">
+              {/* Category picker + manage */}
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Kategori Seç</label>
+                  <button
+                    type="button"
+                    onClick={openCreateCategoryModal}
+                    className="text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-full bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white tap-scale"
+                  >
+                    + Kategori
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
+                  {categories.map((cat) => {
+                    const isSelected = (selectedTaskCategoryId || activeCategoryId) === cat.id;
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedTaskCategoryId(cat.id);
+                          setActiveCategoryId(cat.id);
+                        }}
+                        className={`relative overflow-hidden aspect-square rounded-3xl border transition-all tap-scale hover-glow ${
+                          isSelected ? 'active-pill border-indigo-200' : 'bg-white/70 border-slate-200/70'
+                        }`}
+                        title={cat.name}
+                      >
+                        <div className={`absolute inset-0 ${cat.color} opacity-10`} />
+                        <div className="absolute left-0 top-0 bottom-0 w-2 opacity-60" />
+
+                        <div className="relative h-full w-full p-3 flex flex-col items-center justify-center gap-1">
+                          <div className="text-[22px] leading-none">{cat.icon}</div>
+                          <div className="w-full text-[9px] font-black uppercase tracking-widest text-slate-700 text-center truncate whitespace-nowrap">
+                            {cat.name}
+                          </div>
+                        </div>
+
+                        {/* edit/delete controls */}
+                        <div className="absolute top-2 right-2 flex gap-1 opacity-0 hover:opacity-100 md:group-hover:opacity-100">
+                          <span className="sr-only">Kategori işlemleri</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); openEditCategoryModal(cat.id); }}
+                          className="absolute top-2 left-2 w-8 h-8 rounded-2xl bg-white/80 border border-slate-200/70 text-slate-700 hover:bg-white transition-all"
+                          title="Düzenle"
+                        >
+                          ✎
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); deleteCategoryById(cat.id); }}
+                          className="absolute top-2 right-2 w-8 h-8 rounded-2xl bg-white/80 border border-slate-200/70 text-rose-600 hover:bg-rose-50 transition-all"
+                          title="Sil"
+                        >
+                          🗑
+                        </button>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
-            )}
 
-            <div className="space-y-10">
               <div>
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Görev Nedir?</label>
                 <input 
@@ -2162,8 +2767,18 @@ const App: React.FC = () => {
               )}
               
               <div className="flex gap-6 pt-6">
-                <button onClick={() => { setIsTaskModalOpen(false); setAiSuggestions([]); }} className="flex-1 py-6 font-black text-slate-400 hover:text-slate-600 uppercase text-[10px] tracking-widest">Vazgeç</button>
-                <button onClick={() => handleAddTask()} className="flex-[2] py-6 bg-slate-900 text-white rounded-[2.5rem] font-black shadow-2xl hover:bg-slate-800 active:scale-95 transition-all uppercase text-[10px] tracking-widest">Listeye Ekle</button>
+                <button
+                  onClick={() => { setIsTaskModalOpen(false); setAiSuggestions([]); setEditingTaskId(null); }}
+                  className="flex-1 py-6 font-black text-slate-400 hover:text-slate-600 uppercase text-[10px] tracking-widest"
+                >
+                  Vazgeç
+                </button>
+                <button
+                  onClick={() => handleAddTask()}
+                  className="flex-[2] py-6 bg-slate-900 text-white rounded-[2.5rem] font-black shadow-2xl hover:bg-slate-800 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
+                >
+                  {editingTaskId ? 'Kaydet' : 'Listeye Ekle'}
+                </button>
               </div>
             </div>
           </div>
@@ -2172,8 +2787,8 @@ const App: React.FC = () => {
 
       {/* User Management Modal */}
       {isUserModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[4rem] w-full max-w-2xl p-12 animate-in zoom-in-95 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar">
+        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
             <div className="flex items-center gap-4 mb-10">
               <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-indigo-100 text-indigo-600 text-3xl">
                 👥
@@ -2276,8 +2891,8 @@ const App: React.FC = () => {
 
       {/* WhatsApp Settings Modal */}
       {isWhatsAppModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[4rem] w-full max-w-2xl p-12 animate-in zoom-in-95 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar">
+        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
             <div className="flex items-center gap-4 mb-10">
               <div className={`w-16 h-16 rounded-[2rem] flex items-center justify-center ${whatsAppReady ? 'bg-emerald-100' : 'bg-slate-100'}`}>
                 <svg className={`w-10 h-10 ${whatsAppReady ? 'text-emerald-600' : 'text-slate-400'}`} fill="currentColor" viewBox="0 0 24 24">
@@ -2405,8 +3020,8 @@ const App: React.FC = () => {
 
       {/* Audit Task Modal */}
       {isAuditModalOpen && activeAuditTask && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[4rem] w-full max-w-3xl p-12 animate-in zoom-in-95 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar">
+        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-3xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
             <div className="flex items-center gap-4 mb-10">
               <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-sky-100 text-sky-600 text-3xl">
                 🧾
@@ -2487,8 +3102,8 @@ const App: React.FC = () => {
 
       {/* Audit Review Modal */}
       {isAuditReviewOpen && activeAuditReviewTask && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[4rem] w-full max-w-3xl p-12 animate-in zoom-in-95 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar">
+        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-3xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
             <div className="flex items-center gap-4 mb-10">
               <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-rose-100 text-rose-600 text-3xl">
                 📷
@@ -2540,8 +3155,8 @@ const App: React.FC = () => {
 
       {/* Auth Modal */}
       {isAuthModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[120] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[4rem] w-full max-w-md p-12 animate-in zoom-in-95 shadow-2xl">
+        <div className="fixed inset-0 modal-overlay z-[120] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
             <div className="flex items-center gap-4 mb-10">
               <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-indigo-100 text-indigo-600 text-3xl">
                 🔐
@@ -2584,8 +3199,8 @@ const App: React.FC = () => {
 
       {/* Completion Photo Modal */}
       {isCompletionPhotoModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xl z-[110] flex items-center justify-center p-6">
-          <div className="bg-white rounded-[4rem] w-full max-w-2xl p-12 animate-in zoom-in-95 shadow-2xl">
+        <div className="fixed inset-0 modal-overlay z-[110] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
             <div className="flex items-center gap-4 mb-10">
               <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-indigo-100 text-indigo-600 text-3xl">
                 📸

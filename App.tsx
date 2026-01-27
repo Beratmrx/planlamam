@@ -110,9 +110,18 @@ const App: React.FC = () => {
     });
   };
 
+  const getSessionUserId = () => {
+    try {
+      return localStorage.getItem('planla_session_user_id');
+    } catch {
+      return null;
+    }
+  };
+
   const resolveCurrentUserId = (usersList: User[], desiredId?: string | null) => {
-    if (desiredId && usersList.some(u => u.id === desiredId)) return desiredId;
-    return usersList[0]?.id || defaultAdmin.id;
+    if (!desiredId) return null;
+    if (usersList.some(u => u.id === desiredId)) return desiredId;
+    return null;
   };
 
   const normalizeTasks = (taskList: Task[], fallbackUserId: string) => {
@@ -136,7 +145,6 @@ const App: React.FC = () => {
 
   const buildLocalData = () => {
     const savedUsers = localStorage.getItem('planla_users_v1');
-    const savedCurrentUserId = localStorage.getItem('planla_current_user_id');
     const savedCategories = localStorage.getItem('planla_categories_v3');
     const savedTasks = localStorage.getItem('planla_tasks_v3');
     const savedWhatsAppEnabled = localStorage.getItem('planla_whatsapp_enabled');
@@ -158,10 +166,12 @@ const App: React.FC = () => {
     }
 
     const normalizedUsers = normalizeUsers(initialUsers);
-    const currentUserId = resolveCurrentUserId(normalizedUsers, savedCurrentUserId);
+    // ✅ Session: oturum açıkken yenilemede login isteme
+    const currentUserId = resolveCurrentUserId(normalizedUsers, getSessionUserId());
+    const fallbackUserId = normalizedUsers[0]?.id || 'user-admin';
     const categories = savedCategories ? JSON.parse(savedCategories) : DEFAULT_CATEGORIES;
     const activeCategoryId = categories.length ? categories[0].id : null;
-    const tasks = savedTasks ? normalizeTasks(JSON.parse(savedTasks), currentUserId) : [];
+    const tasks = savedTasks ? normalizeTasks(JSON.parse(savedTasks), fallbackUserId) : [];
     const whatsAppEnabled = savedWhatsAppEnabled ? JSON.parse(savedWhatsAppEnabled) : false;
     const phoneNumber = savedPhoneNumber || defaultPhoneNumber;
     const secondPhoneNumber = savedSecondPhoneNumber || '';
@@ -187,8 +197,9 @@ const App: React.FC = () => {
 
   const applyHydratedState = (data: any) => {
     const normalizedUsers = normalizeUsers(Array.isArray(data?.users) ? data.users : []);
-    const localCurrentUserId = localStorage.getItem('planla_current_user_id');
-    const currentUserId = resolveCurrentUserId(normalizedUsers, localCurrentUserId || data?.currentUserId);
+    // ✅ Session: oturum açıkken yenilemede login isteme
+    const currentUserId = resolveCurrentUserId(normalizedUsers, getSessionUserId());
+    const fallbackUserId = normalizedUsers[0]?.id || 'user-admin';
     const categories = Array.isArray(data?.categories) && data.categories.length ? data.categories : DEFAULT_CATEGORIES;
     const localActiveCategoryId = localStorage.getItem('planla_active_category_id');
     const desiredCategoryId = localActiveCategoryId || data?.activeCategoryId;
@@ -199,11 +210,11 @@ const App: React.FC = () => {
 
     setUsers(normalizedUsers);
     setCurrentUserId(currentUserId);
-    setNewTaskAssigneeId(currentUserId);
+    setNewTaskAssigneeId(currentUserId || '');
     setIsAuthModalOpen(!currentUserId);
     setCategories(categories);
     setActiveCategoryId(activeCategoryId);
-    setTasks(normalizeTasks(Array.isArray(data?.tasks) ? data.tasks : [], currentUserId));
+    setTasks(normalizeTasks(Array.isArray(data?.tasks) ? data.tasks : [], fallbackUserId));
     setWhatsAppEnabled(Boolean(data?.whatsAppEnabled));
     setPhoneNumber(data?.phoneNumber || defaultPhoneNumber);
     setSecondPhoneNumber(data?.secondPhoneNumber || '');
@@ -300,9 +311,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!isHydrated) return;
-    if (currentUserId) {
-      localStorage.setItem('planla_current_user_id', currentUserId);
-    }
+    // 🔒 Güvenlik: kullanıcı id'sini localStorage'da tutma (yenilemede otomatik login olmasın)
   }, [currentUserId, isHydrated]);
 
   useEffect(() => {
@@ -963,6 +972,9 @@ const App: React.FC = () => {
       alert('Kullanıcı adı veya şifre hatalı.');
       return;
     }
+    try {
+      localStorage.setItem('planla_session_user_id', matchedUser.id);
+    } catch {}
     setCurrentUserId(matchedUser.id);
     setNewTaskAssigneeId(matchedUser.id);
     setIsAuthModalOpen(false);
@@ -973,7 +985,11 @@ const App: React.FC = () => {
   const handleLogout = () => {
     setCurrentUserId(null);
     setIsAuthModalOpen(true);
-    localStorage.removeItem('planla_current_user_id');
+    try {
+      localStorage.removeItem('planla_session_user_id');
+      // eski anahtar kaldıysa temizle
+      localStorage.removeItem('planla_current_user_id');
+    } catch {}
   };
 
   const parseDurationMinutes = (value: string) => {
@@ -1195,13 +1211,19 @@ const App: React.FC = () => {
 
   const toggleRentalPaid = (rentalId: string) => {
     const monthKey = getMonthKey(new Date());
+    const actorUserId = currentUserId;
+    if (!actorUserId) {
+      setIsAuthModalOpen(true);
+      alert('Ödeme işlemi için önce giriş yapmalısınız.');
+      return;
+    }
     setRentals(prev => prev.map(rental => {
       if (rental.id !== rentalId) return rental;
       const isPaidForMonth = rental.paidMonth === monthKey;
       if (isPaidForMonth) {
-        return { ...rental, isPaid: false, paidMonth: undefined };
+        return { ...rental, isPaid: false, paidMonth: undefined, paidByUserId: undefined, paidAt: undefined };
       }
-      return { ...rental, isPaid: true, paidMonth: monthKey, lastReminderMonth: undefined };
+      return { ...rental, isPaid: true, paidMonth: monthKey, paidByUserId: actorUserId, paidAt: Date.now(), lastReminderMonth: undefined };
     }));
   };
 
@@ -1246,6 +1268,53 @@ const App: React.FC = () => {
     }
     setAssets(prev => prev.filter(item => item.id !== assetId));
   };
+
+  // 🔒 Zorunlu giriş: oturum açmadan uygulama ekranları görünmesin
+  if (isHydrated && !currentUserId) {
+    return (
+      <div className="min-h-[100dvh] w-full overflow-x-hidden app-bg text-slate-900 flex items-center justify-center p-4 md:p-8">
+        <div className="w-full max-w-md modal-shell p-8 md:p-12 animate-sheet-in">
+          <div className="flex items-center gap-4 mb-10">
+            <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-indigo-100 text-indigo-600 text-3xl">
+              🔐
+            </div>
+            <div className="flex-1">
+              <h3 className="text-4xl font-black tracking-tighter text-slate-800">Giriş Yap</h3>
+              <p className="text-slate-400 font-bold text-sm mt-1">Kullanıcı adı ve şifre</p>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <input
+              type="text"
+              value={loginUsername}
+              onChange={(e) => setLoginUsername(e.target.value)}
+              placeholder="Kullanıcı adı"
+              className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+            />
+            <input
+              type="password"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              placeholder="Şifre"
+              className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+              onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+            />
+            <button
+              onClick={handleLogin}
+              className="w-full py-5 bg-slate-900 text-white rounded-[2rem] font-black shadow-2xl hover:bg-slate-800 active:scale-95 transition-all uppercase text-xs tracking-widest"
+            >
+              Giriş Yap
+            </button>
+          </div>
+
+          <div className="mt-8 text-xs font-bold text-slate-400">
+            Varsayılan admin: <span className="font-black text-slate-600">admin / admin123</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-[100dvh] w-full overflow-x-hidden app-bg text-slate-900">
@@ -1388,25 +1457,25 @@ const App: React.FC = () => {
       <main className="flex-1 p-6 pb-28 lg:pb-12 lg:p-12 overflow-y-auto custom-scrollbar">
         {activeSection === 'home' ? (
           <div className="max-w-4xl mx-auto space-y-10">
-            <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 header-glass p-8 rounded-[2.5rem]">
-              <div className="flex items-center gap-2 md:gap-4">
-                <div className="text-6xl p-7 rounded-[2.2rem] bg-gradient-to-br from-violet-600 to-blue-500 text-white shadow-2xl shadow-indigo-200/60 transform -rotate-2 float-slow">
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 header-glass p-5 sm:p-6 md:p-8 rounded-[2.5rem] overflow-hidden">
+              <div className="flex items-center gap-2 md:gap-4 min-w-0 flex-1">
+                <div className="text-4xl sm:text-5xl md:text-6xl p-5 sm:p-6 md:p-7 rounded-[2.2rem] bg-gradient-to-br from-violet-600 to-blue-500 text-white shadow-2xl shadow-indigo-200/60 transform -rotate-2 float-slow shrink-0">
                   ✨
                 </div>
-                <div>
-                  <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">Anasayfa</h2>
+                <div className="min-w-0">
+                  <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tighter leading-tight truncate">Anasayfa</h2>
                   <div className="flex items-center gap-2 mt-2">
                     <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <p className="text-slate-600 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
+                    <p className="text-slate-600 font-black text-[9px] sm:text-[10px] uppercase tracking-[0.18em] md:tracking-[0.2em] leading-snug break-words md:whitespace-nowrap">
                       {homeStats.active} aktif · {homeStats.completed} tamamlanan · {homeStats.expired} geciken
                     </p>
                   </div>
                 </div>
               </div>
-              <div className="flex flex-nowrap md:flex-wrap items-center gap-2 overflow-x-auto md:overflow-visible custom-scrollbar">
+              <div className="w-full md:w-auto flex flex-wrap items-center gap-2 justify-start md:justify-end">
                 <button
                   onClick={() => setHomeFilterStatus('active')}
-                  className={`shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                  className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
                     homeFilterStatus === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
                   }`}
                 >
@@ -1414,7 +1483,7 @@ const App: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setHomeFilterStatus('completed')}
-                  className={`shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                  className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
                     homeFilterStatus === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
                   }`}
                 >
@@ -1422,7 +1491,7 @@ const App: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setHomeFilterStatus('expired')}
-                  className={`shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                  className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
                     homeFilterStatus === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
                   }`}
                 >
@@ -1430,7 +1499,7 @@ const App: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setHomeFilterStatus('all')}
-                  className={`shrink-0 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
+                  className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
                     homeFilterStatus === 'all' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
                   }`}
                 >
@@ -2132,6 +2201,12 @@ const App: React.FC = () => {
                         <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-2">
                           Kira günü: {rental.dueDay} · Tutar: {formatCurrency(rental.amount)}
                         </div>
+                        {rental.isPaidForMonth && (
+                          <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mt-2">
+                            Ödemeyi alan:{' '}
+                            {users.find(u => u.id === rental.paidByUserId)?.name || 'Bilinmiyor'}
+                          </div>
+                        )}
                         {isOverdue && (
                           <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-black uppercase tracking-widest">
                             {rental.overdueDays} gün gecikmede

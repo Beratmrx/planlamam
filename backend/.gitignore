@@ -8,6 +8,7 @@ data/*.db-wal
 data/*.sqlite
 data/*.sqlite-shm
 data/*.sqlite-wal
+data/storage.json
 
 # WhatsApp session files
 .wwebjs_auth/
@@ -16,6 +17,7 @@ data/*.sqlite-wal
 # Environment variables
 .env
 .env.local
+mysql-my.ini
 
 # Logs
 *.log

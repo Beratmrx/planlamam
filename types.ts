@@ -48,6 +48,8 @@ export interface Rental {
   amount: number;
   isPaid: boolean;
   paidMonth?: string;
+  paidByUserId?: string;
+  paidAt?: number;
   lastReminderMonth?: string;
   createdAt: number;
 }

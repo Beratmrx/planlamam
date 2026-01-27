@@ -18,6 +18,7 @@ let whatsappClient = null;
 let qrCodeData = null;
 let isWhatsAppReady = false;
 let isSendSeenPatched = false;
+let isWhatsAppStarting = false;
 
 const patchSendSeen = async () => {
   if (!whatsappClient?.pupPage) return false;
@@ -59,7 +60,28 @@ const resolveChromiumPath = () => {
 
 const chromiumPath = resolveChromiumPath();
 
+const stopWhatsApp = async () => {
+  const client = whatsappClient;
+  whatsappClient = null;
+  isWhatsAppReady = false;
+  isSendSeenPatched = false;
+  qrCodeData = null;
+  isWhatsAppStarting = false;
+
+  if (!client) return true;
+  try {
+    // whatsapp-web.js supports destroy() to close browser/session
+    await client.destroy();
+    return true;
+  } catch (error) {
+    console.error('❌ WhatsApp durdurma hatası:', error?.message || error);
+    return false;
+  }
+};
+
 const initializeWhatsApp = () => {
+  if (isWhatsAppStarting) return;
+  isWhatsAppStarting = true;
   console.log('🚀 WhatsApp Client başlatılıyor...');
   
   whatsappClient = new Client({
@@ -112,6 +134,7 @@ const initializeWhatsApp = () => {
     console.log('✅ WhatsApp bağlantısı hazır!');
     isWhatsAppReady = true;
     qrCodeData = null;
+    isWhatsAppStarting = false;
     patchSendSeen().then((patched) => {
       isSendSeenPatched = patched;
       console.log(patched ? '🛡️ sendSeen patch uygulandı' : '⚠️ sendSeen patch uygulanamadı');
@@ -125,12 +148,14 @@ const initializeWhatsApp = () => {
   whatsappClient.on('auth_failure', (msg) => {
     console.error('❌ Kimlik doğrulama hatası:', msg);
     isWhatsAppReady = false;
+    isWhatsAppStarting = false;
   });
 
   whatsappClient.on('disconnected', (reason) => {
     console.log('❌ WhatsApp bağlantısı kesildi:', reason);
     isWhatsAppReady = false;
     qrCodeData = null;
+    isWhatsAppStarting = false;
   });
 
   // Hata yakalama
@@ -144,6 +169,7 @@ const initializeWhatsApp = () => {
     whatsappClient = null;
     isWhatsAppReady = false;
     qrCodeData = null;
+    isWhatsAppStarting = false;
   });
 };
 
@@ -194,6 +220,17 @@ app.post('/api/whatsapp/initialize', (req, res) => {
     success: true, 
     message: 'WhatsApp başlatılıyor...' 
   });
+});
+
+app.post('/api/whatsapp/stop', async (req, res) => {
+  const ok = await stopWhatsApp();
+  res.json({ success: ok, message: ok ? 'WhatsApp durduruldu' : 'WhatsApp durdurulamadı' });
+});
+
+app.post('/api/whatsapp/restart', async (req, res) => {
+  await stopWhatsApp();
+  initializeWhatsApp();
+  res.json({ success: true, message: 'WhatsApp yeniden başlatılıyor...' });
 });
 
 app.post('/api/whatsapp/send', async (req, res) => {

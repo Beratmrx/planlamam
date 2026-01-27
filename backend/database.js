@@ -1,72 +1,151 @@
-import { createClient } from '@supabase/supabase-js';
+import mysql from 'mysql2/promise';
 
-// Bu dosya, eski `storage.json` davranışını Supabase Postgres'e taşır:
+// Bu dosya, eski `storage.json` davranışını MySQL'e taşır:
 // - Frontend tek bir payload gönderir (users/categories/tasks/rentals/assets/...)
 // - Biz de tablolar halinde saklarız (users/categories/tasks/rentals/assets + app_settings)
 
-let supabase = null;
-let hasWarnedAboutSchema = false;
+let pool = null;
 
-function getSupabase() {
-  if (supabase) return supabase;
+function getPool() {
+  if (pool) return pool;
 
-  const url = process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const host = process.env.MYSQL_HOST || '127.0.0.1';
+  const port = Number(process.env.MYSQL_PORT || 3306);
+  const user = process.env.MYSQL_USER;
+  const password = process.env.MYSQL_PASSWORD;
+  const database = process.env.MYSQL_DATABASE;
 
-  if (!url || !serviceKey) {
-    throw new Error('SUPABASE_URL ve SUPABASE_SERVICE_ROLE_KEY .env içinde tanımlı olmalı.');
+  if (!user || !database) {
+    throw new Error('MYSQL_USER ve MYSQL_DATABASE .env içinde tanımlı olmalı.');
   }
 
-  supabase = createClient(url, serviceKey, {
-    auth: { persistSession: false, autoRefreshToken: false }
+  pool = mysql.createPool({
+    host,
+    port,
+    user,
+    password,
+    database,
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0,
+    charset: 'utf8mb4'
   });
 
-  return supabase;
+  return pool;
 }
 
-async function warnIfSchemaMissing(error) {
-  if (hasWarnedAboutSchema) return;
-  const msg = String(error?.message || error || '');
-  if (msg.toLowerCase().includes('relation') && (msg.toLowerCase().includes('users') || msg.toLowerCase().includes('categories') || msg.toLowerCase().includes('tasks') || msg.toLowerCase().includes('rentals') || msg.toLowerCase().includes('assets') || msg.toLowerCase().includes('app_settings'))) {
-    hasWarnedAboutSchema = true;
-    console.warn('⚠️ Supabase tablosu bulunamadı. `backend/supabase-schema.sql` içindeki SQL\'i Supabase\'te çalıştırın.');
+function safeJsonParse(value) {
+  if (value == null) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return null;
   }
+}
+
+async function readAllJsonRows(table) {
+  const p = getPool();
+  const [rows] = await p.query(`SELECT data FROM \`${table}\``);
+  return (rows || []).map(r => safeJsonParse(r.data)).filter(Boolean);
+}
+
+async function getSettings() {
+  const p = getPool();
+  const [rows] = await p.query('SELECT json FROM app_settings WHERE `key` = ? LIMIT 1', ['settings']);
+  const row = Array.isArray(rows) && rows.length ? rows[0] : null;
+  return safeJsonParse(row?.json) || {};
+}
+
+async function upsertJsonRows(conn, table, items) {
+  if (!Array.isArray(items)) return;
+
+  // Upsert each row (id + json)
+  for (const item of items) {
+    const id = item?.id;
+    if (!id) continue;
+    await conn.query(
+      `INSERT INTO \`${table}\` (id, data) VALUES (?, CAST(? AS JSON))
+       ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = CURRENT_TIMESTAMP`,
+      [String(id), JSON.stringify(item)]
+    );
+  }
+
+  // Delete rows that are not present anymore
+  const ids = items.map(i => i?.id).filter(Boolean).map(String);
+  if (ids.length === 0) {
+    await conn.query(`DELETE FROM \`${table}\``);
+    return;
+  }
+
+  const placeholders = ids.map(() => '?').join(',');
+  await conn.query(`DELETE FROM \`${table}\` WHERE id NOT IN (${placeholders})`, ids);
 }
 
 export async function getStorageFormat() {
-  const client = getSupabase();
   try {
-    const { data, error } = await client.rpc('get_storage');
+    const [users, categories, tasks, rentals, assets, settings] = await Promise.all([
+      readAllJsonRows('users'),
+      readAllJsonRows('categories'),
+      readAllJsonRows('tasks'),
+      readAllJsonRows('rentals'),
+      readAllJsonRows('assets'),
+      getSettings()
+    ]);
 
-    if (error) {
-      await warnIfSchemaMissing(error);
-      return { version: 1 };
-    }
+    const savedAt = Number(settings?.savedAt || 0) || 0;
+    const mergedSettings = { ...(settings || {}) };
+    delete mergedSettings.savedAt;
 
-    if (!data) return { version: 1 };
-    return data;
+    return {
+      version: 1,
+      savedAt,
+      users,
+      categories,
+      tasks,
+      rentals,
+      assets,
+      ...mergedSettings
+    };
   } catch (error) {
-    await warnIfSchemaMissing(error);
-    console.error('❌ Storage okuma hatası:', error);
+    console.error('❌ MySQL storage okuma hatası:', error);
     return { version: 1 };
   }
 }
 
 export async function saveStorageFormat(payload) {
-  const client = getSupabase();
+  const p = getPool();
+  const conn = await p.getConnection();
   try {
-    const { error } = await client.rpc('apply_storage', { p: payload || {} });
+    await conn.beginTransaction();
 
-    if (error) {
-      await warnIfSchemaMissing(error);
-      console.error('❌ Storage kaydetme hatası:', error);
-      return false;
-    }
+    await upsertJsonRows(conn, 'users', payload?.users);
+    await upsertJsonRows(conn, 'categories', payload?.categories);
+    await upsertJsonRows(conn, 'tasks', payload?.tasks);
+    await upsertJsonRows(conn, 'rentals', payload?.rentals);
+    await upsertJsonRows(conn, 'assets', payload?.assets);
 
+    const now = Date.now();
+    const settings = {
+      savedAt: now,
+      whatsAppEnabled: Boolean(payload?.whatsAppEnabled),
+      phoneNumber: payload?.phoneNumber || '',
+      secondPhoneNumber: payload?.secondPhoneNumber || '',
+      auditOptions: Array.isArray(payload?.auditOptions) ? payload.auditOptions : []
+    };
+
+    await conn.query(
+      'INSERT INTO app_settings (`key`, json) VALUES (?, CAST(? AS JSON)) ON DUPLICATE KEY UPDATE json = VALUES(json), updated_at = CURRENT_TIMESTAMP',
+      ['settings', JSON.stringify(settings)]
+    );
+
+    await conn.commit();
     return true;
   } catch (error) {
-    await warnIfSchemaMissing(error);
-    console.error('❌ Storage kaydetme hatası:', error);
+    try { await conn.rollback(); } catch {}
+    console.error('❌ MySQL storage kaydetme hatası:', error);
     return false;
+  } finally {
+    conn.release();
   }
 }

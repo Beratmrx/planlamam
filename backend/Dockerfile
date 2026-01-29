@@ -1,9 +1,8 @@
 FROM node:22-slim
 
-# Chromium ve gerekli kütüphaneleri yükle
+# Chromium'un çalışması için gerekli runtime kütüphaneleri yükle
+# (Puppeteer kendi Chromium'unu indirecek, bu yüzden sadece runtime deps gerekli)
 RUN apt-get update && apt-get install -y \
-  chromium \
-  chromium-sandbox \
   fonts-liberation \
   libappindicator3-1 \
   libasound2 \
@@ -27,16 +26,18 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Package dosyalarını kopyala ve bağımlılıkları yükle
+# Önce tüm bağımlılıkları yükle (Puppeteer Chromium'u indirmek için)
 COPY package*.json ./
-RUN npm ci --only=production --no-audit --no-fund
+RUN npm install --no-audit --no-fund
+
+# Production bağımlılıklarını temizle (devDependencies hariç)
+RUN npm prune --production
 
 # Uygulama dosyalarını kopyala
 COPY . .
 
 # Environment variables
 ENV NODE_ENV=production
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PORT=3002
 
 # Port'u expose et

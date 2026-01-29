@@ -22,9 +22,11 @@ services:
       retries: 5
 
   backend:
+    image: planla-backend:latest
     build:
       context: ./backend
       dockerfile: Dockerfile
+      network: host
     container_name: planla-backend
     restart: always
     ports:

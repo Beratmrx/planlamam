@@ -35,6 +35,7 @@ services:
       - ./backend/.env
     environment:
       - NODE_ENV=production
+      - PORT=3002
       - CORS_ORIGIN=${CORS_ORIGIN:-https://your-site.netlify.app}
       - MYSQL_HOST=mysql
       - MYSQL_PORT=3306

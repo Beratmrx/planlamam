@@ -4,6 +4,7 @@ import cors from 'cors';
 import qrcode from 'qrcode';
 import qrTerminal from 'qrcode-terminal';
 import pkg from 'whatsapp-web.js';
+import puppeteer from 'puppeteer';
 import fs from 'fs';
 // Database seçimi: MySQL varsa MySQL kullan, yoksa JSON dosyası kullan
 let dbModule;
@@ -24,7 +25,7 @@ const { getStorageFormat, saveStorageFormat } = dbModule;
 const { Client, LocalAuth } = pkg;
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3002;
 const JSON_LIMIT = process.env.JSON_LIMIT || '10mb';
 
 // CORS configuration
@@ -65,8 +66,15 @@ const patchSendSeen = async () => {
 
 // WhatsApp Client Başlatma
 const resolveChromiumPath = () => {
+  let puppeteerPath;
+  try {
+    puppeteerPath = puppeteer?.executablePath?.();
+  } catch {
+    puppeteerPath = undefined;
+  }
   const candidates = [
     process.env.PUPPETEER_EXECUTABLE_PATH,
+    puppeteerPath,
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
@@ -116,7 +124,7 @@ const initializeWhatsApp = () => {
     authStrategy: new LocalAuth(),
     puppeteer: {
       headless: true,
-      executablePath: chromiumPath,
+      ...(chromiumPath ? { executablePath: chromiumPath } : {}),
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',

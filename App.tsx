@@ -3,9 +3,16 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Task, Category, User, Rental, AssetItem } from './types';
 import { DEFAULT_CATEGORIES, CATEGORY_COLORS, CATEGORY_ICONS } from './constants';
 import { PlusIcon, TrashIcon, SparklesIcon, CheckIcon } from './components/Icons';
-import { initializeWhatsApp, getWhatsAppStatus, sendWhatsAppMessage } from './services/whatsappService';
+import { initializeWhatsApp, getWhatsAppStatus, sendWhatsAppMessage, logoutWhatsApp } from './services/whatsappService';
 
-const BACKEND_URL = (import.meta as any).env?.VITE_BACKEND_URL || 'http://localhost:3001';
+const ENV_BACKEND_URL = (import.meta as any).env?.VITE_BACKEND_URL as string | undefined;
+const inferredHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+const INFERRED_BACKEND_URL = `http://${inferredHost}:3002`;
+const isLocalEnvUrl = Boolean(ENV_BACKEND_URL && /localhost|127\.0\.0\.1/i.test(ENV_BACKEND_URL));
+// Docker container'ında çalışıyorsa (VITE_BACKEND_URL backend içeriyorsa), Nginx reverse proxy kullan (/api)
+const isDockerEnv = Boolean(ENV_BACKEND_URL && ENV_BACKEND_URL.includes('backend'));
+// Eğer env localhost ise ve siteyi IP ile açıyorsak (telefon vb.), backend URL'i otomatik IP:3002 olur.
+const BACKEND_URL = isDockerEnv ? '' : (!ENV_BACKEND_URL || isLocalEnvUrl ? INFERRED_BACKEND_URL : ENV_BACKEND_URL);
 
 const App: React.FC = () => {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -543,10 +550,20 @@ const App: React.FC = () => {
       const status = await getWhatsAppStatus();
       setWhatsAppReady(status.ready);
       setQrCode(status.qrCode);
-      if (!status.hasClient && !whatsAppInitRequested) {
+      
+      // Backend restart / crash durumunda (hasClient:false) yeniden başlatmayı tekrar denemeliyiz.
+      // ANCAK: Sadece kullanıcı manuel olarak "WhatsApp Aç" butonuna bastıysa (whatsAppEnabled: true)
+      if (!status.hasClient && whatsAppEnabled) {
+        setWhatsAppInitRequested(false);
+      }
+
+      // Otomatik yeniden başlatma: Sadece whatsAppEnabled TRUE ve henüz initialize edilmemişse
+      if (!status.hasClient && !whatsAppInitRequested && whatsAppEnabled) {
+        console.log('🔄 WhatsApp client yok, otomatik başlatılıyor...');
         const result = await initializeWhatsApp();
         if (!result.success) {
           console.error('WhatsApp başlatma hatası:', result.message);
+          return;
         }
         setWhatsAppInitRequested(true);
       }
@@ -882,7 +899,11 @@ const App: React.FC = () => {
   }, [isTaskModalOpen, selectedTaskCategoryId, activeCategoryId, categories]);
 
   const handleWhatsAppInitialize = async () => {
+    console.log('🔵 WhatsApp başlatma butonuna tıklandı');
+    console.log('🔵 BACKEND_URL:', BACKEND_URL);
+    console.log('🔵 ENV_BACKEND_URL:', ENV_BACKEND_URL);
     const result = await initializeWhatsApp();
+    console.log('🔵 initializeWhatsApp sonucu:', result);
     if (result.success) {
       setWhatsAppEnabled(true);
       localStorage.setItem('planla_whatsapp_enabled', 'true');
@@ -891,11 +912,26 @@ const App: React.FC = () => {
     }
   };
 
-  const handleWhatsAppDisconnect = () => {
+  const handleWhatsAppDisconnect = async () => {
+    if (!confirm('⚠️ WhatsApp oturumunu tamamen sonlandırmak istediğinize emin misiniz?\n\nTekrar bağlanmak için QR kod taratmanız gerekecek.')) {
+      return;
+    }
+    
+    // ÖNCE tüm state'leri temizle (böylece useEffect durur ve otomatik yeniden başlatmaz)
     setWhatsAppEnabled(false);
     setWhatsAppReady(false);
     setQrCode(null);
+    setWhatsAppInitRequested(false);
+    setShowWhatsAppSettings(false); // Modal'ı kapat
     localStorage.setItem('planla_whatsapp_enabled', 'false');
+    
+    // SONRA logout API'yi çağır
+    const result = await logoutWhatsApp();
+    if (result.success) {
+      alert('✅ WhatsApp oturumu tamamen sonlandırıldı!\n\n💡 Tekrar bağlanmak için "WhatsApp Aç" butonuna basın ve QR kodu taratın.');
+    } else {
+      alert('⚠️ Uyarı: ' + result.message + '\n\nAncak frontend oturumu temizlendi.');
+    }
   };
 
   const handlePhoneNumberSave = () => {

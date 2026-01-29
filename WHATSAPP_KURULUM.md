@@ -8,6 +8,8 @@ cd backend
 npm install
 ```
 
+**ÖNEMLİ**: İlk kurulumda Puppeteer otomatik olarak Chromium indirecek. Bu işlem 1-2 dakika sürebilir.
+
 ### 2. Frontend Paketleri (Zaten Kurulu)
 Ana klasörde:
 ```bash
@@ -20,6 +22,8 @@ Backend klasöründe:
 npm start
 ```
 Backend `http://localhost:3001` adresinde çalışacak.
+
+**NOT**: Veritabanı olarak basit JSON dosyası kullanılıyor (`storage.json`). MySQL/PostgreSQL kurulumuna gerek yok!
 
 ### 4. Frontend'i Başlat
 Ana klasörde (yeni bir terminal penceresi açın):

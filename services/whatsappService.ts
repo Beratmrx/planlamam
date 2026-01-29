@@ -1,4 +1,10 @@
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001';
+const ENV_BACKEND_URL = import.meta.env.VITE_BACKEND_URL as string | undefined;
+const inferredHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+const INFERRED_BACKEND_URL = `http://${inferredHost}:3002`;
+const isLocalEnvUrl = Boolean(ENV_BACKEND_URL && /localhost|127\.0\.0\.1/i.test(ENV_BACKEND_URL));
+// Docker container'ında çalışıyorsa (VITE_BACKEND_URL backend içeriyorsa), Nginx reverse proxy kullan (/api)
+const isDockerEnv = Boolean(ENV_BACKEND_URL && ENV_BACKEND_URL.includes('backend'));
+const BACKEND_URL = isDockerEnv ? '' : (!ENV_BACKEND_URL || isLocalEnvUrl ? INFERRED_BACKEND_URL : ENV_BACKEND_URL);
 
 export interface WhatsAppStatus {
   ready: boolean;
@@ -7,15 +13,21 @@ export interface WhatsAppStatus {
 }
 
 export const initializeWhatsApp = async (): Promise<{ success: boolean; message: string }> => {
+  const url = `${BACKEND_URL}/api/whatsapp/initialize`;
+  console.log('🔵 initializeWhatsApp çağrıldı, URL:', url);
+  console.log('🔵 BACKEND_URL:', BACKEND_URL);
   try {
-    const response = await fetch(`${BACKEND_URL}/api/whatsapp/initialize`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
-    return await response.json();
+    console.log('🔵 Response status:', response.status);
+    const data = await response.json();
+    console.log('🔵 Response data:', data);
+    return data;
   } catch (error) {
-    console.error('WhatsApp başlatma hatası:', error);
-    return { success: false, message: 'Backend bağlantısı kurulamadı' };
+    console.error('❌ WhatsApp başlatma hatası:', error);
+    return { success: false, message: 'Backend bağlantısı kurulamadı: ' + (error as Error).message };
   }
 };
 
@@ -43,3 +55,15 @@ export const sendWhatsAppMessage = async (phoneNumber: string, message: string):
   }
 };
 
+export const logoutWhatsApp = async (): Promise<{ success: boolean; message: string }> => {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/whatsapp/logout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return await response.json();
+  } catch (error) {
+    console.error('WhatsApp oturum kapatma hatası:', error);
+    return { success: false, message: 'Oturum kapatılamadı' };
+  }
+};

@@ -2,6 +2,14 @@
   command = "npm run build"
   publish = "dist"
 
+# API isteklerini VDS backend'e proxy et (mixed content / CORS önlemek için)
+# VDS IP'yi kendi sunucunuzla değiştirin (örn. 31.58.250.86)
+[[redirects]]
+  from = "/api/*"
+  to = "http://31.58.250.86:3002/api/:splat"
+  status = 200
+  force = true
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
@@ -9,5 +17,5 @@
 
 [build.environment]
   NODE_VERSION = "22"
-  # Netlify Dashboard > Site settings > Environment variables'dan VITE_BACKEND_URL ekleyin:
-  # Örnek: https://api.sizin-domain.com veya http://VDS_IP:3002
+  # Netlify'da VITE_BACKEND_URL = site URL'niz (örn. https://etkegym.com) olmalı.
+  # Böylece frontend aynı origin'e istek atar, Netlify proxy ile backend'e gider.

@@ -4,7 +4,9 @@ const INFERRED_BACKEND_URL = `http://${inferredHost}:3002`;
 const isLocalEnvUrl = Boolean(ENV_BACKEND_URL && /localhost|127\.0\.0\.1/i.test(ENV_BACKEND_URL));
 // Docker container'ında çalışıyorsa (VITE_BACKEND_URL backend içeriyorsa), Nginx reverse proxy kullan (/api)
 const isDockerEnv = Boolean(ENV_BACKEND_URL && ENV_BACKEND_URL.includes('backend'));
-const BACKEND_URL = isDockerEnv ? '' : (!ENV_BACKEND_URL || isLocalEnvUrl ? INFERRED_BACKEND_URL : ENV_BACKEND_URL);
+// Netlify proxy: VITE_BACKEND_URL = site URL ise aynı origin kullan (/api proxy edilir)
+const isSameOriginProxy = typeof window !== 'undefined' && ENV_BACKEND_URL && (window.location.origin === ENV_BACKEND_URL.replace(/\/$/, ''));
+const BACKEND_URL = isDockerEnv || isSameOriginProxy ? '' : (!ENV_BACKEND_URL || isLocalEnvUrl ? INFERRED_BACKEND_URL : ENV_BACKEND_URL);
 
 export interface WhatsAppStatus {
   ready: boolean;
@@ -12,14 +14,14 @@ export interface WhatsAppStatus {
   hasClient: boolean;
 }
 
-export const initializeWhatsApp = async (): Promise<{ success: boolean; message: string }> => {
+export const initializeWhatsApp = async (force = false): Promise<{ success: boolean; message: string }> => {
   const url = `${BACKEND_URL}/api/whatsapp/initialize`;
-  console.log('🔵 initializeWhatsApp çağrıldı, URL:', url);
-  console.log('🔵 BACKEND_URL:', BACKEND_URL);
+  console.log('🔵 initializeWhatsApp çağrıldı, URL:', url, 'force:', force);
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force })
     });
     console.log('🔵 Response status:', response.status);
     const data = await response.json();

@@ -82,6 +82,12 @@ const App: React.FC = () => {
   const [tasksAllFilterCategory, setTasksAllFilterCategory] = useState('all');
   const [tasksAllFilterText, setTasksAllFilterText] = useState('');
 
+  // Daily Report States
+  const [homeView, setHomeView] = useState<'tasks' | 'report'>('tasks');
+  const [reportFilterUser, setReportFilterUser] = useState('all');
+  const [reportFilterStatus, setReportFilterStatus] = useState('all');
+  const [reportFilterDate, setReportFilterDate] = useState<'today' | 'week' | 'month' | 'all'>('today');
+
   // WhatsApp States
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [whatsAppReady, setWhatsAppReady] = useState(false);
@@ -710,6 +716,84 @@ const App: React.FC = () => {
     }
     return list;
   }, [visibleByUser, homeFilterStatus, homeFilterCategory, homeFilterText]);
+
+  // Daily Report Calculation
+  const dailyReport = useMemo(() => {
+    // Helper to check dates
+    const checkDate = (dateTs: number, filter: 'today' | 'week' | 'month' | 'all') => {
+      if (filter === 'all') return true;
+      const date = new Date(dateTs);
+      const now = new Date();
+
+      if (filter === 'today') {
+        return date.getDate() === now.getDate() &&
+          date.getMonth() === now.getMonth() &&
+          date.getFullYear() === now.getFullYear();
+      }
+
+      if (filter === 'week') {
+        const oneDay = 24 * 60 * 60 * 1000;
+        const diffDays = Math.round(Math.abs((now.getTime() - date.getTime()) / oneDay));
+        return diffDays <= 7;
+      }
+
+      if (filter === 'month') {
+        return date.getMonth() === now.getMonth() &&
+          date.getFullYear() === now.getFullYear();
+      }
+
+      return true;
+    };
+
+    // Filter users if needed
+    const reportUsers = reportFilterUser === 'all'
+      ? users
+      : users.filter(u => u.id === reportFilterUser);
+
+    return reportUsers.map(user => {
+      // Get all tasks relevant to this user (assigned to or created by)
+      // For report, we mostly care about tasks ASSIGNED to the user
+      const userTasks = tasks.filter(t => t.assignedToUserId === user.id);
+
+      // Apply date filter
+      const dateFiltered = userTasks.filter(task => {
+        // Use completion date for completed tasks, creation date for others
+        const dateToCheck = task.isCompleted && task.lastCompletedDate
+          ? new Date(task.lastCompletedDate).getTime()
+          : task.createdAt;
+        return checkDate(dateToCheck, reportFilterDate);
+      });
+
+      // Calculate stats
+      const completed = dateFiltered.filter(t => t.isCompleted);
+      const active = dateFiltered.filter(t => !t.isCompleted && !t.isExpired);
+      const expired = dateFiltered.filter(t => t.isExpired);
+
+      // Apply status filter for the task list
+      let displayTasks = dateFiltered;
+      if (reportFilterStatus === 'completed') displayTasks = completed;
+      else if (reportFilterStatus === 'active') displayTasks = active;
+      else if (reportFilterStatus === 'expired') displayTasks = expired;
+
+      return {
+        user,
+        stats: {
+          total: dateFiltered.length,
+          completed: completed.length,
+          active: active.length,
+          expired: expired.length
+        },
+        tasks: displayTasks
+      };
+    }).filter(item => {
+      // If filtering by status, only show users who have tasks in that status
+      if (reportFilterStatus === 'all') return true;
+      if (reportFilterStatus === 'completed') return item.stats.completed > 0;
+      if (reportFilterStatus === 'active') return item.stats.active > 0;
+      if (reportFilterStatus === 'expired') return item.stats.expired > 0;
+      return true;
+    });
+  }, [users, tasks, reportFilterUser, reportFilterStatus, reportFilterDate]);
   const homeStats = useMemo(() => {
     const active = visibleByUser.filter(t => !t.isCompleted && !t.isExpired).length;
     const completed = visibleByUser.filter(t => t.isCompleted).length;
@@ -790,7 +874,11 @@ const App: React.FC = () => {
     setEditingTaskId(null);
     const nextCategoryId = categoryId || selectedTaskCategoryId || activeCategoryId || categories[0]?.id || null;
     setSelectedTaskCategoryId(nextCategoryId);
-    if (nextCategoryId) setActiveCategoryId(nextCategoryId);
+    // ✅ FIX: Only change activeCategoryId if categoryId parameter is explicitly provided
+    // This prevents unwanted category switching when opening modal from current category
+    if (categoryId) {
+      setActiveCategoryId(categoryId);
+    }
     // Reset task form state
     setNewTaskTitle('');
     setNewTaskExpectedDuration('01:00');
@@ -830,6 +918,8 @@ const App: React.FC = () => {
     setSelectedAuditOptions([]);
     setNewTaskRequiresPhoto(false);
     setEditingTaskId(null);
+    // ✅ FIX: Reset selectedTaskCategoryId to prevent state conflicts
+    setSelectedTaskCategoryId(null);
     // Keep newTaskAssigneeId as current user for next task
     if (currentUserId) {
       setNewTaskAssigneeId(currentUserId);
@@ -876,11 +966,14 @@ const App: React.FC = () => {
       // Show success notification
       showSuccessNotification('Görev başarıyla güncellendi! 🎉', '✅');
 
-      // Close modal and reset state after a brief delay to ensure state is saved
+      // ✅ FIX: Increased delay and separated modal close from state reset
+      // to ensure state is properly saved before cleanup
       setTimeout(() => {
         setIsTaskModalOpen(false);
-        resetTaskModalState();
-      }, 100);
+        setTimeout(() => {
+          resetTaskModalState();
+        }, 50);
+      }, 150);
       return;
     }
 
@@ -911,11 +1004,14 @@ const App: React.FC = () => {
     const assignedUserName = users.find(u => u.id === assignedId)?.name || 'Bilinmiyor';
     showSuccessNotification(`Görev başarıyla eklendi! 📝\n${assignedUserName} kullanıcısına atandı.`, '✅');
 
-    // Close modal and reset state after a brief delay to ensure state is saved
+    // ✅ FIX: Increased delay and separated modal close from state reset
+    // to ensure state is properly saved before cleanup
     setTimeout(() => {
       setIsTaskModalOpen(false);
-      resetTaskModalState();
-    }, 100);
+      setTimeout(() => {
+        resetTaskModalState();
+      }, 50);
+    }, 150);
 
     // Send WhatsApp notification asynchronously
     const assignedUser = users.find(u => u.id === assignedId);
@@ -936,7 +1032,8 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!isTaskModalOpen) return;
     const fallback = selectedTaskCategoryId || activeCategoryId || categories[0]?.id || null;
-    if (fallback && fallback !== activeCategoryId) setActiveCategoryId(fallback);
+    // ✅ FIX: Removed automatic activeCategoryId change to prevent unwanted category switching
+    // Only set selectedTaskCategoryId if it's not already set
     if (!selectedTaskCategoryId) setSelectedTaskCategoryId(fallback);
     // Ensure assignee is set when modal opens
     if (currentUserId && !editingTaskId && !newTaskAssigneeId) {
@@ -1565,153 +1662,349 @@ const App: React.FC = () => {
                         ✨
                       </div>
                       <div className="min-w-0">
-                        <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tighter leading-tight truncate">Anasayfa</h2>
+                        <div className="flex items-center gap-4">
+                          <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tighter leading-tight truncate">Anasayfa</h2>
+
+                          {/* View Switcher */}
+                          <div className="hidden md:flex bg-white/50 p-1 rounded-2xl border border-slate-200/50">
+                            <button
+                              onClick={() => setHomeView('tasks')}
+                              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${homeView === 'tasks' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-slate-500 hover:bg-white/50'
+                                }`}
+                            >
+                              Görevler
+                            </button>
+                            <button
+                              onClick={() => setHomeView('report')}
+                              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${homeView === 'report' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-slate-500 hover:bg-white/50'
+                                }`}
+                            >
+                              Rapor
+                            </button>
+                          </div>
+                        </div>
+
                         <div className="flex items-center gap-2 mt-2">
                           <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                           <p className="text-slate-600 font-black text-[9px] sm:text-[10px] uppercase tracking-[0.18em] md:tracking-[0.2em] leading-snug break-words md:whitespace-nowrap">
                             {homeStats.active} aktif · {homeStats.completed} tamamlanan · {homeStats.expired} geciken
                           </p>
                         </div>
+
+                        {/* Mobile View Switcher */}
+                        <div className="flex md:hidden mt-4 bg-white/50 p-1 rounded-2xl border border-slate-200/50 w-fit">
+                          <button
+                            onClick={() => setHomeView('tasks')}
+                            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${homeView === 'tasks' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-slate-500 hover:bg-white/50'
+                              }`}
+                          >
+                            Görevler
+                          </button>
+                          <button
+                            onClick={() => setHomeView('report')}
+                            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${homeView === 'report' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-200' : 'text-slate-500 hover:bg-white/50'
+                              }`}
+                          >
+                            Rapor
+                          </button>
+                        </div>
                       </div>
                     </div>
-                    <div className="w-full md:w-auto flex flex-wrap items-center gap-2 justify-start md:justify-end">
-                      <button
-                        onClick={() => setHomeFilterStatus('active')}
-                        className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                          }`}
-                      >
-                        Aktif
-                      </button>
-                      <button
-                        onClick={() => setHomeFilterStatus('completed')}
-                        className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                          }`}
-                      >
-                        Tamamlanan
-                      </button>
-                      <button
-                        onClick={() => setHomeFilterStatus('expired')}
-                        className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                          }`}
-                      >
-                        Geciken
-                      </button>
-                      <button
-                        onClick={() => setHomeFilterStatus('all')}
-                        className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'all' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                          }`}
-                      >
-                        Tümü
-                      </button>
-                    </div>
-                  </header>
 
-                  {/* Floating-label filter panel (no extra state) */}
-                  <div className="card-glass rounded-[2.5rem] p-6">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="relative">
-                        <select
-                          value={homeFilterCategory}
-                          onChange={(e) => setHomeFilterCategory(e.target.value)}
-                          className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
-                        >
-                          <option value="all">Tümü</option>
-                          {categories.map(cat => (
-                            <option key={cat.id} value={cat.id}>{cat.name}</option>
-                          ))}
-                        </select>
-                        <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                          Kategori
-                        </label>
-                      </div>
-
-                      <div className="relative md:col-span-2">
-                        <input
-                          type="text"
-                          value={homeFilterText}
-                          onChange={(e) => setHomeFilterText(e.target.value)}
-                          placeholder=" "
-                          className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
-                        />
-                        <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                          Görev adıyla ara
-                        </label>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    {homeTasks.map(task => {
-                      const category = categories.find(c => c.id === task.categoryId);
-                      const statusLabel = task.isExpired ? 'Geciken' : task.isCompleted ? 'Tamamlandı' : 'Aktif';
-                      const remainingMs = task.dueAt ? task.dueAt - nowTs : 0;
-                      const totalMs = task.dueAt && task.createdAt ? Math.max(1, task.dueAt - task.createdAt) : 1;
-                      const progressPct = task.dueAt ? Math.min(100, Math.max(0, (remainingMs / totalMs) * 100)) : 0;
-                      return (
-                        <div
-                          key={task.id}
-                          className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${task.isExpired ? 'ring-2 ring-rose-300/60' : task.isCompleted ? 'opacity-70' : ''
+                    {homeView === 'tasks' && (
+                      <div className="w-full md:w-auto flex flex-wrap items-center gap-2 justify-start md:justify-end">
+                        <button
+                          onClick={() => setHomeFilterStatus('active')}
+                          className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
                             }`}
                         >
-                          {/* Left color bar */}
-                          <div className={`absolute left-0 top-0 bottom-0 w-2 ${category?.color || 'bg-slate-300'} opacity-90`} />
+                          Aktif
+                        </button>
+                        <button
+                          onClick={() => setHomeFilterStatus('completed')}
+                          className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                            }`}
+                        >
+                          Tamamlanan
+                        </button>
+                        <button
+                          onClick={() => setHomeFilterStatus('expired')}
+                          className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                            }`}
+                        >
+                          Geciken
+                        </button>
+                        <button
+                          onClick={() => setHomeFilterStatus('all')}
+                          className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'all' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                            }`}
+                        >
+                          Tümü
+                        </button>
+                      </div>
+                    )}
+                  </header>
 
-                          <div className="flex items-center gap-5">
-                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${category?.color || 'bg-slate-300'} text-white shadow-md shadow-slate-200`}>
-                              {category?.icon || '📌'}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="text-2xl font-black text-slate-900 tracking-tight truncate">
-                                {task.title}
+                  {homeView === 'report' ? (
+                    <div className="animate-fade-in space-y-6">
+                      {/* Report Filters */}
+                      <div className="card-glass rounded-[2.5rem] p-6">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          {/* User Filter */}
+                          <div className="relative">
+                            <select
+                              value={reportFilterUser}
+                              onChange={(e) => setReportFilterUser(e.target.value)}
+                              className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
+                            >
+                              <option value="all">Tüm Kullanıcılar</option>
+                              {users.map(u => (
+                                <option key={u.id} value={u.id}>{u.name}</option>
+                              ))}
+                            </select>
+                            <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                              Kullanıcı
+                            </label>
+                          </div>
+
+                          {/* Status Filter */}
+                          <div className="relative">
+                            <select
+                              value={reportFilterStatus}
+                              onChange={(e) => setReportFilterStatus(e.target.value)}
+                              className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
+                            >
+                              <option value="all">Tümü</option>
+                              <option value="active">Aktif</option>
+                              <option value="completed">Tamamlanan</option>
+                              <option value="expired">Geciken</option>
+                            </select>
+                            <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                              Durum
+                            </label>
+                          </div>
+
+                          {/* Date Filter */}
+                          <div className="relative">
+                            <select
+                              value={reportFilterDate}
+                              onChange={(e) => setReportFilterDate(e.target.value as any)}
+                              className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
+                            >
+                              <option value="today">Bugün</option>
+                              <option value="week">Bu Hafta</option>
+                              <option value="month">Bu Ay</option>
+                              <option value="all">Tüm Zamanlar</option>
+                            </select>
+                            <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                              Zaman
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Report Cards */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {dailyReport.map(({ user, stats, tasks: userTasks }) => (
+                          <div key={user.id} className="card-glass rounded-[2.5rem] p-6 lg:p-8 hover-glow transition-all">
+                            {/* User Header */}
+                            <div className="flex items-center gap-4 mb-6">
+                              <div className="w-16 h-16 rounded-2xl bg-indigo-500 text-white flex items-center justify-center text-2xl font-black shadow-lg shadow-indigo-200">
+                                {user.name.charAt(0).toUpperCase()}
                               </div>
-                              <div className="text-sm font-bold text-slate-500 truncate">
-                                {category?.name || 'Kategori Yok'}
-                              </div>
-
-                              {/* Status + remaining */}
-                              <div className="mt-3 flex flex-wrap items-center gap-2">
-                                <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${task.isExpired
-                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                  : task.isCompleted
-                                    ? 'bg-slate-100 text-slate-600 border-slate-200'
-                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                  }`}>
-                                  {statusLabel}
-                                </span>
-
-                                {task.dueAt && !task.isCompleted && !task.isExpired && (
-                                  <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
-                                    Kalan: {formatRemaining(task.dueAt - nowTs)}
+                              <div>
+                                <h3 className="text-xl font-black text-slate-800 tracking-tight">{user.name}</h3>
+                                <div className="flex items-center gap-2 mt-1">
+                                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 bg-slate-100 px-2 py-1 rounded-lg">
+                                    {user.role === 'admin' ? 'Yönetici' : 'Personel'}
                                   </span>
-                                )}
+                                  <span className="text-[10px] font-black uppercase tracking-widest text-indigo-400">
+                                    {stats.total} Görev
+                                  </span>
+                                </div>
                               </div>
+                            </div>
 
-                              {task.dueAt && !task.isCompleted && !task.isExpired && (
-                                <div className="mt-3">
-                                  <div className="h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
-                                    <div
-                                      className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500"
-                                      style={{ width: `${progressPct}%` }}
-                                    />
-                                  </div>
+                            {/* Stats Grid */}
+                            <div className="grid grid-cols-3 gap-3 mb-6">
+                              <div className="bg-emerald-50 rounded-2xl p-4 text-center border border-emerald-100">
+                                <div className="text-2xl font-black text-emerald-600 mb-1">{stats.completed}</div>
+                                <div className="text-[9px] font-black uppercase tracking-widest text-emerald-400">Tamamlanan</div>
+                              </div>
+                              <div className="bg-amber-50 rounded-2xl p-4 text-center border border-amber-100">
+                                <div className="text-2xl font-black text-amber-600 mb-1">{stats.active}</div>
+                                <div className="text-[9px] font-black uppercase tracking-widest text-amber-400">Aktif</div>
+                              </div>
+                              <div className="bg-rose-50 rounded-2xl p-4 text-center border border-rose-100">
+                                <div className="text-2xl font-black text-rose-600 mb-1">{stats.expired}</div>
+                                <div className="text-[9px] font-black uppercase tracking-widest text-rose-400">Geciken</div>
+                              </div>
+                            </div>
+
+                            {/* Task List (Compact) */}
+                            <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
+                              {userTasks.length > 0 ? (
+                                userTasks.map(task => {
+                                  const cat = categories.find(c => c.id === task.categoryId);
+                                  return (
+                                    <div key={task.id} className={`p-4 rounded-2xl border transition-all ${task.isCompleted ? 'bg-emerald-50/50 border-emerald-100 opacity-80' :
+                                        task.isExpired ? 'bg-rose-50/50 border-rose-100' :
+                                          'bg-white/60 border-slate-100'
+                                      }`}>
+                                      <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                          <div className={`font-bold text-sm truncate ${task.isCompleted ? 'line-through text-slate-500' : 'text-slate-700'}`}>
+                                            {task.title}
+                                          </div>
+                                          <div className="flex items-center gap-2 mt-1">
+                                            <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                                              <span>{cat?.icon || '📌'}</span> {cat?.name}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <div className="shrink-0">
+                                          {task.isCompleted ? (
+                                            <span className="text-lg">✅</span>
+                                          ) : task.isExpired ? (
+                                            <span className="text-lg">⏰</span>
+                                          ) : (
+                                            <span className="text-lg">⏳</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              ) : (
+                                <div className="text-center py-8 text-slate-400 text-xs font-bold uppercase tracking-widest">
+                                  Görev bulunamadı
                                 </div>
                               )}
                             </div>
                           </div>
-                        </div>
-                      );
-                    })}
-
-                    {homeTasks.length === 0 && (
-                      <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
-                        <div className="text-8xl mb-8 opacity-60 float-slow">✨</div>
-                        <h3 className="text-3xl font-black text-slate-700 tracking-tighter">BUGÜN İŞ YOK</h3>
-                        <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
-                          Filtreyi değiştirerek diğer görevleri görebilirsin.
-                        </p>
+                        ))}
                       </div>
-                    )}
-                  </div>
+
+                      {dailyReport.length === 0 && (
+                        <div className="text-center py-24 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
+                          <div className="text-6xl mb-6 opacity-60">📊</div>
+                          <h3 className="text-2xl font-black text-slate-700 tracking-tighter">KAYIT BULUNAMADI</h3>
+                          <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                            Lütfen filtreleri kontrol edin.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      {/* Floating-label filter panel (no extra state) */}
+                      <div className="card-glass rounded-[2.5rem] p-6">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div className="relative">
+                            <select
+                              value={homeFilterCategory}
+                              onChange={(e) => setHomeFilterCategory(e.target.value)}
+                              className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
+                            >
+                              <option value="all">Tümü</option>
+                              {categories.map(cat => (
+                                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                              ))}
+                            </select>
+                            <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                              Kategori
+                            </label>
+                          </div>
+
+                          <div className="relative md:col-span-2">
+                            <input
+                              type="text"
+                              value={homeFilterText}
+                              onChange={(e) => setHomeFilterText(e.target.value)}
+                              placeholder=" "
+                              className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
+                            />
+                            <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                              Görev adıyla ara
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        {homeTasks.map(task => {
+                          const category = categories.find(c => c.id === task.categoryId);
+                          const statusLabel = task.isExpired ? 'Geciken' : task.isCompleted ? 'Tamamlandı' : 'Aktif';
+                          const remainingMs = task.dueAt ? task.dueAt - nowTs : 0;
+                          const totalMs = task.dueAt && task.createdAt ? Math.max(1, task.dueAt - task.createdAt) : 1;
+                          const progressPct = task.dueAt ? Math.min(100, Math.max(0, (remainingMs / totalMs) * 100)) : 0;
+                          return (
+                            <div
+                              key={task.id}
+                              className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${task.isExpired ? 'ring-2 ring-rose-300/60' : task.isCompleted ? 'opacity-70' : ''
+                                }`}
+                            >
+                              {/* Left color bar */}
+                              <div className={`absolute left-0 top-0 bottom-0 w-2 ${category?.color || 'bg-slate-300'} opacity-90`} />
+
+                              <div className="flex items-center gap-5">
+                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${category?.color || 'bg-slate-300'} text-white shadow-md shadow-slate-200`}>
+                                  {category?.icon || '📌'}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="text-2xl font-black text-slate-900 tracking-tight truncate">
+                                    {task.title}
+                                  </div>
+                                  <div className="text-sm font-bold text-slate-500 truncate">
+                                    {category?.name || 'Kategori Yok'}
+                                  </div>
+
+                                  {/* Status + remaining */}
+                                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${task.isExpired
+                                      ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                      : task.isCompleted
+                                        ? 'bg-slate-100 text-slate-600 border-slate-200'
+                                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                      }`}>
+                                      {statusLabel}
+                                    </span>
+
+                                    {task.dueAt && !task.isCompleted && !task.isExpired && (
+                                      <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
+                                        Kalan: {formatRemaining(task.dueAt - nowTs)}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {task.dueAt && !task.isCompleted && !task.isExpired && (
+                                    <div className="mt-3">
+                                      <div className="h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
+                                        <div
+                                          className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500"
+                                          style={{ width: `${progressPct}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {homeTasks.length === 0 && (
+                          <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
+                            <div className="text-8xl mb-8 opacity-60 float-slow">✨</div>
+                            <h3 className="text-3xl font-black text-slate-700 tracking-tighter">BUGÜN İŞ YOK</h3>
+                            <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                              Filtreyi değiştirerek diğer görevleri görebilirsin.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               ) : activeSection === 'tasks' ? (
                 activeCategory ? (

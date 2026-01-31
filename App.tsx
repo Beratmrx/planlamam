@@ -85,7 +85,6 @@ const App: React.FC = () => {
   // WhatsApp States
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [whatsAppReady, setWhatsAppReady] = useState(false);
-  const [whatsAppHasClient, setWhatsAppHasClient] = useState(false);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [whatsAppEnabled, setWhatsAppEnabled] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('05536789487');
@@ -242,9 +241,7 @@ const App: React.FC = () => {
     const load = async () => {
       let serverData: any = null;
       try {
-        const response = await fetch(`${BACKEND_URL}/api/storage`, {
-          headers: { 'ngrok-skip-browser-warning': '1' }
-        });
+        const response = await fetch(`${BACKEND_URL}/api/storage`);
         if (response.ok) {
           serverData = await response.json();
         }
@@ -284,7 +281,7 @@ const App: React.FC = () => {
           };
           await fetch(`${BACKEND_URL}/api/storage`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(storagePayload)
           });
           lastStorageSyncRef.current = Date.now();
@@ -303,9 +300,7 @@ const App: React.FC = () => {
     if (!isHydrated) return;
     const interval = window.setInterval(async () => {
       try {
-        const response = await fetch(`${BACKEND_URL}/api/storage`, {
-          headers: { 'ngrok-skip-browser-warning': '1' }
-        });
+        const response = await fetch(`${BACKEND_URL}/api/storage`);
         if (!response.ok) return;
         const data = await response.json();
         if (data?.savedAt && data.savedAt > lastStorageSyncRef.current) {
@@ -352,7 +347,7 @@ const App: React.FC = () => {
       try {
         await fetch(`${BACKEND_URL}/api/storage`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': '1' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         lastStorageSyncRef.current = Date.now();
@@ -552,7 +547,6 @@ const App: React.FC = () => {
     const checkStatus = async () => {
       const status = await getWhatsAppStatus();
       setWhatsAppReady(status.ready);
-      setWhatsAppHasClient(status.hasClient);
       setQrCode(status.qrCode);
       
       // Backend restart / crash durumunda (hasClient:false) yeniden başlatmayı tekrar denemeliyiz.
@@ -902,26 +896,17 @@ const App: React.FC = () => {
     if (!selectedTaskCategoryId) setSelectedTaskCategoryId(fallback);
   }, [isTaskModalOpen, selectedTaskCategoryId, activeCategoryId, categories]);
 
-  const handleWhatsAppInitialize = async (forceReconnect = false) => {
-    console.log('🔵 WhatsApp başlatma butonuna tıklandı', 'force:', forceReconnect);
-    const result = await initializeWhatsApp(forceReconnect);
+  const handleWhatsAppInitialize = async () => {
+    console.log('🔵 WhatsApp başlatma butonuna tıklandı');
+    console.log('🔵 BACKEND_URL:', BACKEND_URL);
+    console.log('🔵 ENV_BACKEND_URL:', ENV_BACKEND_URL);
+    const result = await initializeWhatsApp();
     console.log('🔵 initializeWhatsApp sonucu:', result);
     if (result.success) {
       setWhatsAppEnabled(true);
-      setWhatsAppInitRequested(true);
       localStorage.setItem('planla_whatsapp_enabled', 'true');
-      if (forceReconnect) setQrCode(null);
     } else {
-      if (result.message?.includes('zaten bağlı') && !forceReconnect) {
-        // Backend "zaten bağlı" diyor → bağlı ekranını göster; kullanıcı "Yeniden bağlan" ile QR alabilsin (confirm istemeden)
-        setWhatsAppEnabled(true);
-        setWhatsAppReady(true);
-        setWhatsAppHasClient(true);
-        setWhatsAppInitRequested(true);
-        localStorage.setItem('planla_whatsapp_enabled', 'true');
-      } else {
-        alert(result.message);
-      }
+      alert(result.message);
     }
   };
 
@@ -3109,41 +3094,14 @@ const App: React.FC = () => {
                     <p className="text-emerald-600 font-black text-2xl mb-4">
                       WhatsApp Bağlı!
                     </p>
-                    <p className="text-slate-600 font-bold mb-6">
+                    <p className="text-slate-600 font-bold mb-8">
                       Artık görevlerinizi tamamladığınızda otomatik olarak bildirim alacaksınız
                     </p>
-                    <div className="flex flex-wrap gap-4 justify-center">
-                      <button
-                        onClick={handleWhatsAppDisconnect}
-                        className="px-8 py-4 bg-rose-100 text-rose-600 rounded-[2rem] font-black hover:bg-rose-200 active:scale-95 transition-all text-sm"
-                      >
-                        Bağlantıyı Kes
-                      </button>
-                      <button
-                        onClick={() => handleWhatsAppInitialize(true)}
-                        className="px-8 py-4 bg-amber-100 text-amber-700 rounded-[2rem] font-black hover:bg-amber-200 active:scale-95 transition-all text-sm"
-                      >
-                        Yeniden bağlan (QR göster)
-                      </button>
-                    </div>
-                    <p className="text-slate-400 text-xs mt-4">
-                      Telefonda Bağlı Cihazlar’da görünmüyorsa veya mesaj gitmiyorsa “Yeniden bağlan” ile QR taratın.
-                    </p>
-                  </div>
-                ) : whatsAppHasClient && !qrCode ? (
-                  <div className="text-center py-8">
-                    <div className="text-6xl mb-6">⚠️</div>
-                    <p className="text-amber-600 font-black text-xl mb-2">
-                      Bağlantı kopuk görünüyor
-                    </p>
-                    <p className="text-slate-600 font-bold mb-6">
-                      Telefonda Bağlı Cihazlar’da görünmüyorsa veya mesaj gitmiyorsa yeniden bağlanın.
-                    </p>
                     <button
-                      onClick={() => handleWhatsAppInitialize(true)}
-                      className="px-10 py-5 bg-amber-500 text-white rounded-[2rem] font-black hover:bg-amber-600 active:scale-95 transition-all text-sm"
+                      onClick={handleWhatsAppDisconnect}
+                      className="px-8 py-4 bg-rose-100 text-rose-600 rounded-[2rem] font-black hover:bg-rose-200 active:scale-95 transition-all text-sm"
                     >
-                      Yeniden bağlan (QR göster)
+                      Bağlantıyı Kes
                     </button>
                   </div>
                 ) : (

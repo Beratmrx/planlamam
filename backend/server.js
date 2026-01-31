@@ -118,21 +118,6 @@ const stopWhatsApp = async () => {
   }
 };
 
-/** getState() bazen CONNECTED döndüğü halde oturum ölü olabiliyor (telefonda görünmüyor). Hafif bir sunucu isteği ile gerçekten canlı mı kontrol et. */
-const isSessionReallyAlive = async () => {
-  if (!whatsappClient) return false;
-  try {
-    const state = await whatsappClient.getState();
-    if (state !== 'CONNECTED') return false;
-    // Hafif canlı ping: getNumberId sunucuya istek atar; oturum geçersizse timeout/hata verebilir
-    await whatsappClient.getNumberId('15551234567');
-    return true;
-  } catch (e) {
-    console.warn('WhatsApp canlı oturum kontrolü (oturum ölü veya hata):', e?.message || e);
-    return false;
-  }
-};
-
 const initializeWhatsApp = () => {
   if (isWhatsAppStarting) return;
   isWhatsAppStarting = true;
@@ -364,26 +349,7 @@ app.post('/api/storage', async (req, res) => {
   }
 });
 
-app.get('/api/whatsapp/status', async (req, res) => {
-  // Canlı bağlantı kontrolü: client var ama gerçekten bağlı mı? (getState bazen CONNECTED döndüğü halde oturum ölü olabiliyor)
-  if (whatsappClient) {
-    try {
-      const state = await whatsappClient.getState();
-      if (state !== 'CONNECTED') {
-        isWhatsAppReady = false;
-        return res.json({ ready: false, qrCode: qrCodeData, hasClient: true });
-      }
-      const reallyAlive = await isSessionReallyAlive();
-      if (!reallyAlive) {
-        isWhatsAppReady = false;
-        return res.json({ ready: false, qrCode: qrCodeData, hasClient: true });
-      }
-    } catch (err) {
-      // getState veya canlı kontrol hata verirse bağlantı kopuk demektir
-      isWhatsAppReady = false;
-      return res.json({ ready: false, qrCode: qrCodeData, hasClient: true });
-    }
-  }
+app.get('/api/whatsapp/status', (req, res) => {
   res.json({
     ready: isWhatsAppReady,
     qrCode: qrCodeData,
@@ -391,45 +357,16 @@ app.get('/api/whatsapp/status', async (req, res) => {
   });
 });
 
-app.post('/api/whatsapp/initialize', async (req, res) => {
-  const force = req.query.force === 'true' || req.body?.force === true;
-
-  if (whatsappClient && !force) {
-    try {
-      const state = await whatsappClient.getState();
-      if (state !== 'CONNECTED') {
-        // Client var ama bağlantı kopuk → otomatik yeniden başlat (QR çıkar)
-        await stopWhatsApp();
-        initializeWhatsApp();
-        return res.json({ success: true, message: 'Bağlantı kopuktu, WhatsApp yeniden başlatılıyor...' });
-      }
-      // getState CONNECTED olsa bile oturum ölü olabilir (telefonda görünmüyor); canlı kontrol
-      const reallyAlive = await isSessionReallyAlive();
-      if (!reallyAlive) {
-        await stopWhatsApp();
-        initializeWhatsApp();
-        return res.json({ success: true, message: 'Oturum geçersizdi, WhatsApp yeniden başlatılıyor...' });
-      }
-    } catch (err) {
-      // getState hata verirse client ölü → yeniden başlat
-      await stopWhatsApp();
-      initializeWhatsApp();
-      return res.json({ success: true, message: 'Bağlantı kopuktu, WhatsApp yeniden başlatılıyor...' });
-    }
+app.post('/api/whatsapp/initialize', (req, res) => {
+  if (whatsappClient) {
     return res.json({ 
       success: false, 
-      message: 'WhatsApp zaten bağlı',
-      ready: true 
+      message: 'WhatsApp zaten başlatılmış',
+      ready: isWhatsAppReady 
     });
   }
-
-  if (whatsappClient && force) {
-    await stopWhatsApp();
-  }
-
-  if (!whatsappClient) {
-    initializeWhatsApp();
-  }
+  
+  initializeWhatsApp();
   res.json({ 
     success: true, 
     message: 'WhatsApp başlatılıyor...' 

@@ -14,14 +14,14 @@ export interface WhatsAppStatus {
   hasClient: boolean;
 }
 
-export const initializeWhatsApp = async (force = false): Promise<{ success: boolean; message: string }> => {
+export const initializeWhatsApp = async (): Promise<{ success: boolean; message: string }> => {
   const url = `${BACKEND_URL}/api/whatsapp/initialize`;
-  console.log('🔵 initializeWhatsApp çağrıldı, URL:', url, 'force:', force);
+  console.log('🔵 initializeWhatsApp çağrıldı, URL:', url);
+  console.log('🔵 BACKEND_URL:', BACKEND_URL);
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ force })
+      headers: { 'Content-Type': 'application/json' }
     });
     console.log('🔵 Response status:', response.status);
     const data = await response.json();

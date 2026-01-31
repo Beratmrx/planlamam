@@ -29,7 +29,7 @@ const App: React.FC = () => {
   const [activeSection, setActiveSection] = useState<'home' | 'tasks' | 'rentals' | 'assets'>('home');
   const [rentals, setRentals] = useState<Rental[]>([]);
   const [assets, setAssets] = useState<AssetItem[]>([]);
-  
+
   // UI States
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
@@ -81,7 +81,7 @@ const App: React.FC = () => {
   const [homeFilterText, setHomeFilterText] = useState('');
   const [tasksAllFilterCategory, setTasksAllFilterCategory] = useState('all');
   const [tasksAllFilterText, setTasksAllFilterText] = useState('');
-  
+
   // WhatsApp States
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [whatsAppReady, setWhatsAppReady] = useState(false);
@@ -90,6 +90,13 @@ const App: React.FC = () => {
   const [phoneNumber, setPhoneNumber] = useState('05536789487');
   const [secondPhoneNumber, setSecondPhoneNumber] = useState('');
   const [whatsAppInitRequested, setWhatsAppInitRequested] = useState(false);
+
+  // Success Notification State
+  const [successNotification, setSuccessNotification] = useState<{
+    show: boolean;
+    message: string;
+    icon: string;
+  }>({ show: false, message: '', icon: '' });
 
   const saveTimerRef = useRef<number | null>(null);
   const lastStorageSyncRef = useRef(0);
@@ -543,12 +550,12 @@ const App: React.FC = () => {
   // WhatsApp durumunu periyodik kontrol et
   useEffect(() => {
     if (!whatsAppEnabled) return;
-    
+
     const checkStatus = async () => {
       const status = await getWhatsAppStatus();
       setWhatsAppReady(status.ready);
       setQrCode(status.qrCode);
-      
+
       // Backend restart / crash durumunda (hasClient:false) yeniden başlatmayı tekrar denemeliyiz.
       // ANCAK: Sadece kullanıcı manuel olarak "WhatsApp Aç" butonuna bastıysa (whatsAppEnabled: true)
       if (!status.hasClient && whatsAppEnabled) {
@@ -710,6 +717,13 @@ const App: React.FC = () => {
     return { active, completed, expired };
   }, [visibleByUser]);
 
+  const showSuccessNotification = (message: string, icon: string = '✅') => {
+    setSuccessNotification({ show: true, message, icon });
+    setTimeout(() => {
+      setSuccessNotification({ show: false, message: '', icon: '' });
+    }, 3000);
+  };
+
   const openCreateCategoryModal = () => {
     setEditingCategoryId(null);
     setNewCategoryName('');
@@ -777,8 +791,17 @@ const App: React.FC = () => {
     const nextCategoryId = categoryId || selectedTaskCategoryId || activeCategoryId || categories[0]?.id || null;
     setSelectedTaskCategoryId(nextCategoryId);
     if (nextCategoryId) setActiveCategoryId(nextCategoryId);
-    setIsTaskModalOpen(true);
+    // Reset task form state
+    setNewTaskTitle('');
+    setNewTaskExpectedDuration('01:00');
+    setNewTaskRepeat('once');
     setSelectedAuditOptions([]);
+    setNewTaskRequiresPhoto(false);
+    // Set assignee to current user (don't reset it)
+    if (currentUserId && !newTaskAssigneeId) {
+      setNewTaskAssigneeId(currentUserId);
+    }
+    setIsTaskModalOpen(true);
   };
 
   const openEditTaskModal = (taskId: string) => {
@@ -807,6 +830,10 @@ const App: React.FC = () => {
     setSelectedAuditOptions([]);
     setNewTaskRequiresPhoto(false);
     setEditingTaskId(null);
+    // Keep newTaskAssigneeId as current user for next task
+    if (currentUserId) {
+      setNewTaskAssigneeId(currentUserId);
+    }
   };
 
   const handleAddTask = async (titleOverride?: string) => {
@@ -845,8 +872,15 @@ const App: React.FC = () => {
       };
 
       setTasks(prev => prev.map(t => (t.id === editingTaskId ? updated : t)));
-      setIsTaskModalOpen(false);
-      resetTaskModalState();
+
+      // Show success notification
+      showSuccessNotification('Görev başarıyla güncellendi! 🎉', '✅');
+
+      // Close modal and reset state after a brief delay to ensure state is saved
+      setTimeout(() => {
+        setIsTaskModalOpen(false);
+        resetTaskModalState();
+      }, 100);
       return;
     }
 
@@ -870,10 +904,20 @@ const App: React.FC = () => {
       completionPhotoDataUrl: undefined
     };
 
-    setTasks([newTask, ...tasks]);
-    setIsTaskModalOpen(false);
-    resetTaskModalState();
+    // Add task to state first
+    setTasks(prev => [newTask, ...prev]);
 
+    // Show success notification
+    const assignedUserName = users.find(u => u.id === assignedId)?.name || 'Bilinmiyor';
+    showSuccessNotification(`Görev başarıyla eklendi! 📝\n${assignedUserName} kullanıcısına atandı.`, '✅');
+
+    // Close modal and reset state after a brief delay to ensure state is saved
+    setTimeout(() => {
+      setIsTaskModalOpen(false);
+      resetTaskModalState();
+    }, 100);
+
+    // Send WhatsApp notification asynchronously
     const assignedUser = users.find(u => u.id === assignedId);
     if ((whatsAppEnabled || whatsAppReady) && assignedUser?.phoneNumber) {
       const category = categories.find(c => c.id === categoryIdToUse);
@@ -894,7 +938,11 @@ const App: React.FC = () => {
     const fallback = selectedTaskCategoryId || activeCategoryId || categories[0]?.id || null;
     if (fallback && fallback !== activeCategoryId) setActiveCategoryId(fallback);
     if (!selectedTaskCategoryId) setSelectedTaskCategoryId(fallback);
-  }, [isTaskModalOpen, selectedTaskCategoryId, activeCategoryId, categories]);
+    // Ensure assignee is set when modal opens
+    if (currentUserId && !editingTaskId && !newTaskAssigneeId) {
+      setNewTaskAssigneeId(currentUserId);
+    }
+  }, [isTaskModalOpen, selectedTaskCategoryId, activeCategoryId, categories, currentUserId, editingTaskId]);
 
   const handleWhatsAppInitialize = async () => {
     console.log('🔵 WhatsApp başlatma butonuna tıklandı');
@@ -914,7 +962,7 @@ const App: React.FC = () => {
     if (!confirm('⚠️ WhatsApp oturumunu tamamen sonlandırmak istediğinize emin misiniz?\n\nTekrar bağlanmak için QR kod taratmanız gerekecek.')) {
       return;
     }
-    
+
     // ÖNCE tüm state'leri temizle (böylece useEffect durur ve otomatik yeniden başlatmaz)
     setWhatsAppEnabled(false);
     setWhatsAppReady(false);
@@ -922,7 +970,7 @@ const App: React.FC = () => {
     setWhatsAppInitRequested(false);
     setShowWhatsAppSettings(false); // Modal'ı kapat
     localStorage.setItem('planla_whatsapp_enabled', 'false');
-    
+
     // SONRA logout API'yi çağır
     const result = await logoutWhatsApp();
     if (result.success) {
@@ -940,25 +988,37 @@ const App: React.FC = () => {
 
   const handleAddUser = () => {
     if (currentUser?.role !== 'admin') return;
-    if (!newUserName.trim() || !newUserUsername.trim() || !newUserPassword.trim()) return;
+    if (!newUserName.trim() || !newUserUsername.trim() || !newUserPassword.trim()) {
+      alert('Lütfen tüm zorunlu alanları doldurun.');
+      return;
+    }
     if (users.some(user => user.username === newUserUsername.trim())) {
       alert('Bu kullanıcı adı zaten var.');
       return;
     }
     const newUser: User = {
-      id: `user-${Date.now()}`,
+      id: `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       name: newUserName.trim(),
       username: newUserUsername.trim(),
       password: newUserPassword,
       role: newUserRole,
       phoneNumber: newUserPhone.trim() || undefined
     };
+    // Add user to state first
     setUsers(prev => [...prev, newUser]);
-    setNewUserName('');
-    setNewUserRole('user');
-    setNewUserPhone('');
-    setNewUserUsername('');
-    setNewUserPassword('');
+
+    // Show success notification
+    const roleLabel = newUserRole === 'admin' ? 'Admin' : 'Kullanıcı';
+    showSuccessNotification(`${newUserName} başarıyla eklendi! 👤\n${roleLabel} olarak kaydedildi.`, '✅');
+
+    // Clear form after a brief delay to ensure state is saved
+    setTimeout(() => {
+      setNewUserName('');
+      setNewUserRole('user');
+      setNewUserPhone('');
+      setNewUserUsername('');
+      setNewUserPassword('');
+    }, 100);
   };
 
   const handleDeleteUser = (userId: string) => {
@@ -1008,7 +1068,7 @@ const App: React.FC = () => {
     }
     try {
       localStorage.setItem('planla_session_user_id', matchedUser.id);
-    } catch {}
+    } catch { }
     setCurrentUserId(matchedUser.id);
     setNewTaskAssigneeId(matchedUser.id);
     setIsAuthModalOpen(false);
@@ -1023,7 +1083,7 @@ const App: React.FC = () => {
       localStorage.removeItem('planla_session_user_id');
       // eski anahtar kaldıysa temizle
       localStorage.removeItem('planla_current_user_id');
-    } catch {}
+    } catch { }
   };
 
   const parseDurationMinutes = (value: string) => {
@@ -1235,6 +1295,10 @@ const App: React.FC = () => {
       createdAt: Date.now()
     };
     setRentals([newRental, ...rentals]);
+
+    // Show success notification
+    showSuccessNotification(`Kira başarıyla eklendi! 🏠\nDaire: ${unit} - ${name}`, '✅');
+
     setNewRentalUnit('');
     setNewRentalName('');
     setNewRentalDueDay('1');
@@ -1287,6 +1351,10 @@ const App: React.FC = () => {
       createdAt: Date.now()
     };
     setAssets([newItem, ...assets]);
+
+    // Show success notification
+    showSuccessNotification(`Stok başarıyla eklendi! 🧰\n${name} - ${room}`, '✅');
+
     setNewAssetName('');
     setNewAssetRoom('');
     setNewAssetDate('');
@@ -1359,1123 +1427,1096 @@ const App: React.FC = () => {
           <div className="min-h-[100dvh] flex flex-col lg:flex-row overflow-hidden">
             {/* Sidebar */}
             <aside className="hidden lg:flex lg:w-[340px] nav-glass border-r border-slate-200/60 flex-col h-[100dvh] sticky top-0 z-30">
-        <div className="p-8 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 bg-gradient-to-br from-indigo-500 to-blue-500 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-200/60 float-slow">
-               <SparklesIcon className="w-6 h-6 text-white" />
-            </div>
-            <div className="flex flex-col">
-              <h1 className="text-3xl font-black tracking-tighter bg-gradient-to-r from-indigo-600 via-blue-600 to-fuchsia-600 bg-clip-text text-transparent">
-                Planla
-              </h1>
-              <div className="mt-2 flex items-center gap-2">
-                <div className="flex items-center gap-2 px-3 py-2 rounded-2xl bg-white/70 border border-slate-200/60">
-                  <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-slate-200 to-slate-100 border border-slate-200/70" />
-                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-700">
-                    {currentUser ? `${currentUser.name} ${currentUser.role === 'admin' ? '(Admin)' : ''}` : 'Giriş yap'}
+              <div className="p-8 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 bg-gradient-to-br from-indigo-500 to-blue-500 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-200/60 float-slow">
+                    <SparklesIcon className="w-6 h-6 text-white" />
                   </div>
-                </div>
-                {currentUser?.role === 'admin' && (
-                  <button
-                    onClick={() => setIsUserModalOpen(true)}
-                    className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-2xl bg-white/70 border border-slate-200/60 text-slate-700 hover:shadow-lg hover:shadow-indigo-100 transition-all hover-glow"
-                  >
-                    Kullanıcılar
-                  </button>
-                )}
-                <button
-                  onClick={handleLogout}
-                  className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-2xl bg-white/70 border border-slate-200/60 text-slate-600 hover:text-slate-800 transition-all hover-glow"
-                >
-                  Çıkış
-                </button>
-              </div>
-            </div>
-          </div>
-          <button 
-            onClick={() => setIsWhatsAppModalOpen(true)}
-            className={`p-3 rounded-2xl transition-all border ${whatsAppReady ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-lg shadow-emerald-100' : 'bg-white/70 text-slate-600 border-slate-200/60 hover:shadow-lg hover:shadow-slate-200'}`}
-            title="WhatsApp Ayarları"
-          >
-            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
-            </svg>
-          </button>
-        </div>
-
-        <nav className="flex flex-col flex-1 overflow-y-auto px-4 py-4 space-y-1.5 custom-scrollbar">
-          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-4 mb-4">MENÜ</p>
-          <div
-            onClick={() => setActiveSection('home')}
-            className={`flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${
-              activeSection === 'home' ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
-            }`}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xl leading-none">✨</span>
-              <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Anasayfa</span>
-            </div>
-          </div>
-
-          <div
-            onClick={() => {
-              setActiveSection('tasks');
-              setActiveCategoryId(null); // "Tüm Görevler" görünümü
-            }}
-            className={`mt-3 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${
-              activeSection === 'tasks' && !activeCategoryId ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
-            }`}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xl leading-none">📝</span>
-              <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Görevler</span>
-            </div>
-          </div>
-          {categories.map((cat) => (
-            <div 
-              key={cat.id}
-              onClick={() => {
-                setActiveSection('tasks');
-                setActiveCategoryId(cat.id);
-              }}
-              className={`group flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${
-                  activeSection === 'tasks' && activeCategoryId === cat.id 
-                  ? `active-pill text-slate-900 translate-x-1` 
-                  : 'hover:bg-white/70 text-slate-700'
-                }`}
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="text-xl leading-none">{cat.icon}</span>
-                <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">{cat.name}</span>
-              </div>
-              <button 
-                onClick={(e) => handleDeleteCategory(cat.id, e)}
-                className="p-2 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-50 hover:text-rose-600"
-              >
-                <TrashIcon className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
-          <button 
-            onClick={() => setIsCategoryModalOpen(true)}
-            className="w-full mt-6 py-4 border-2 border-dashed border-slate-300/70 rounded-3xl text-slate-600 hover:border-indigo-400 transition-all flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest bg-white/70 hover:bg-white btn-glow tap-scale"
-          >
-            <PlusIcon className="w-4 h-4" /> Yeni Kategori
-          </button>
-          <div
-            onClick={() => setActiveSection('rentals')}
-            className={`mt-6 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${
-              activeSection === 'rentals' ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
-            }`}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xl leading-none">🏠</span>
-              <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Kiralar</span>
-            </div>
-          </div>
-          <div
-            onClick={() => setActiveSection('assets')}
-            className={`mt-3 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${
-              activeSection === 'assets' ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
-            }`}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xl leading-none">🧰</span>
-              <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Stok</span>
-            </div>
-          </div>
-        </nav>
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 p-6 pb-28 lg:pb-12 lg:p-12 overflow-y-auto custom-scrollbar">
-        {activeSection === 'home' ? (
-          <div className="max-w-4xl mx-auto space-y-10">
-            <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 header-glass p-5 sm:p-6 md:p-8 rounded-[2.5rem] overflow-hidden">
-              <div className="flex items-center gap-2 md:gap-4 min-w-0 flex-1">
-                <div className="text-4xl sm:text-5xl md:text-6xl p-5 sm:p-6 md:p-7 rounded-[2.2rem] bg-gradient-to-br from-violet-600 to-blue-500 text-white shadow-2xl shadow-indigo-200/60 transform -rotate-2 float-slow shrink-0">
-                  ✨
-                </div>
-                <div className="min-w-0">
-                  <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tighter leading-tight truncate">Anasayfa</h2>
-                  <div className="flex items-center gap-2 mt-2">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <p className="text-slate-600 font-black text-[9px] sm:text-[10px] uppercase tracking-[0.18em] md:tracking-[0.2em] leading-snug break-words md:whitespace-nowrap">
-                      {homeStats.active} aktif · {homeStats.completed} tamamlanan · {homeStats.expired} geciken
-                    </p>
-                  </div>
-                </div>
-              </div>
-              <div className="w-full md:w-auto flex flex-wrap items-center gap-2 justify-start md:justify-end">
-                <button
-                  onClick={() => setHomeFilterStatus('active')}
-                  className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                    homeFilterStatus === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                  }`}
-                >
-                  Aktif
-                </button>
-                <button
-                  onClick={() => setHomeFilterStatus('completed')}
-                  className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                    homeFilterStatus === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                  }`}
-                >
-                  Tamamlanan
-                </button>
-                <button
-                  onClick={() => setHomeFilterStatus('expired')}
-                  className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                    homeFilterStatus === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                  }`}
-                >
-                  Geciken
-                </button>
-                <button
-                  onClick={() => setHomeFilterStatus('all')}
-                  className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                    homeFilterStatus === 'all' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                  }`}
-                >
-                  Tümü
-                </button>
-              </div>
-            </header>
-
-            {/* Floating-label filter panel (no extra state) */}
-            <div className="card-glass rounded-[2.5rem] p-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="relative">
-                  <select
-                    value={homeFilterCategory}
-                    onChange={(e) => setHomeFilterCategory(e.target.value)}
-                    className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
-                  >
-                    <option value="all">Tümü</option>
-                    {categories.map(cat => (
-                      <option key={cat.id} value={cat.id}>{cat.name}</option>
-                    ))}
-                  </select>
-                  <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                    Kategori
-                  </label>
-                </div>
-
-                <div className="relative md:col-span-2">
-                  <input
-                    type="text"
-                    value={homeFilterText}
-                    onChange={(e) => setHomeFilterText(e.target.value)}
-                    placeholder=" "
-                    className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
-                  />
-                  <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                    Görev adıyla ara
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              {homeTasks.map(task => {
-                const category = categories.find(c => c.id === task.categoryId);
-                const statusLabel = task.isExpired ? 'Geciken' : task.isCompleted ? 'Tamamlandı' : 'Aktif';
-                const remainingMs = task.dueAt ? task.dueAt - nowTs : 0;
-                const totalMs = task.dueAt && task.createdAt ? Math.max(1, task.dueAt - task.createdAt) : 1;
-                const progressPct = task.dueAt ? Math.min(100, Math.max(0, (remainingMs / totalMs) * 100)) : 0;
-                return (
-                  <div
-                    key={task.id}
-                    className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${
-                      task.isExpired ? 'ring-2 ring-rose-300/60' : task.isCompleted ? 'opacity-70' : ''
-                    }`}
-                  >
-                    {/* Left color bar */}
-                    <div className={`absolute left-0 top-0 bottom-0 w-2 ${category?.color || 'bg-slate-300'} opacity-90`} />
-
-                    <div className="flex items-center gap-5">
-                      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${category?.color || 'bg-slate-300'} text-white shadow-md shadow-slate-200`}>
-                        {category?.icon || '📌'}
+                  <div className="flex flex-col">
+                    <h1 className="text-3xl font-black tracking-tighter bg-gradient-to-r from-indigo-600 via-blue-600 to-fuchsia-600 bg-clip-text text-transparent">
+                      Planla
+                    </h1>
+                    <div className="mt-2 flex items-center gap-2">
+                      <div className="flex items-center gap-2 px-3 py-2 rounded-2xl bg-white/70 border border-slate-200/60">
+                        <div className="w-7 h-7 rounded-xl bg-gradient-to-br from-slate-200 to-slate-100 border border-slate-200/70" />
+                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-700">
+                          {currentUser ? `${currentUser.name} ${currentUser.role === 'admin' ? '(Admin)' : ''}` : 'Giriş yap'}
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <div className="text-2xl font-black text-slate-900 tracking-tight truncate">
-                          {task.title}
-                        </div>
-                        <div className="text-sm font-bold text-slate-500 truncate">
-                          {category?.name || 'Kategori Yok'}
-                        </div>
-
-                        {/* Status + remaining */}
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${
-                            task.isExpired
-                              ? 'bg-rose-50 text-rose-700 border-rose-200'
-                              : task.isCompleted
-                                ? 'bg-slate-100 text-slate-600 border-slate-200'
-                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          }`}>
-                            {statusLabel}
-                          </span>
-
-                          {task.dueAt && !task.isCompleted && !task.isExpired && (
-                            <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
-                              Kalan: {formatRemaining(task.dueAt - nowTs)}
-                            </span>
-                          )}
-                        </div>
-
-                        {task.dueAt && !task.isCompleted && !task.isExpired && (
-                          <div className="mt-3">
-                            <div className="h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
-                              <div
-                                className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500"
-                                style={{ width: `${progressPct}%` }}
-                              />
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                      {currentUser?.role === 'admin' && (
+                        <button
+                          onClick={() => setIsUserModalOpen(true)}
+                          className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-2xl bg-white/70 border border-slate-200/60 text-slate-700 hover:shadow-lg hover:shadow-indigo-100 transition-all hover-glow"
+                        >
+                          Kullanıcılar
+                        </button>
+                      )}
+                      <button
+                        onClick={handleLogout}
+                        className="text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-2xl bg-white/70 border border-slate-200/60 text-slate-600 hover:text-slate-800 transition-all hover-glow"
+                      >
+                        Çıkış
+                      </button>
                     </div>
                   </div>
-                );
-              })}
-
-              {homeTasks.length === 0 && (
-                <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
-                  <div className="text-8xl mb-8 opacity-60 float-slow">✨</div>
-                  <h3 className="text-3xl font-black text-slate-700 tracking-tighter">BUGÜN İŞ YOK</h3>
-                  <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
-                    Filtreyi değiştirerek diğer görevleri görebilirsin.
-                  </p>
                 </div>
-              )}
-            </div>
-          </div>
-        ) : activeSection === 'tasks' ? (
-          activeCategory ? (
-            <div className="max-w-4xl mx-auto space-y-10">
-            <header className="relative overflow-hidden header-glass p-8 rounded-[2.5rem]">
-              <div className="absolute inset-0 pointer-events-none">
-                <div className={`absolute -top-16 -left-16 h-56 w-56 rounded-full ${activeCategory.color} opacity-20 blur-3xl`} />
-                <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
-              </div>
-
-              <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
-                <div className="flex items-center gap-2 md:gap-4">
-                  <div className={`text-6xl p-7 rounded-[2.2rem] ${activeCategory.color} text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow`}>
-                      {activeCategory.icon}
-                  </div>
-                  <div>
-                     <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">{activeCategory.name}</h2>
-                     <div className="flex items-center gap-2 mt-2">
-                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        <p className="text-slate-600 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
-                          {taskView === 'active' ? activeTasks.length : taskView === 'completed' ? completedTasks.length : expiredTasks.length} {taskView === 'active' ? 'Aktif Görev' : taskView === 'completed' ? 'Tamamlanan Görev' : 'Yapılmayan Görev'}
-                        </p>
-                     </div>
-                  </div>
-                </div>
-
-                {/* Desktop add button (mobile uses FAB) */}
-              <button 
-                onClick={() => openCreateTaskModal(activeCategoryId)}
-                  className="hidden md:flex group items-center gap-4 px-10 py-6 btn-accent btn-glow text-white rounded-[2rem] font-black hover:opacity-95 transition-all tap-scale"
+                <button
+                  onClick={() => setIsWhatsAppModalOpen(true)}
+                  className={`p-3 rounded-2xl transition-all border ${whatsAppReady ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-lg shadow-emerald-100' : 'bg-white/70 text-slate-600 border-slate-200/60 hover:shadow-lg hover:shadow-slate-200'}`}
+                  title="WhatsApp Ayarları"
                 >
-                  <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" /> 
-                  GÖREV EKLE
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                  </svg>
                 </button>
               </div>
 
-              {/* Segmented control (sticky on mobile) */}
-              <div className="relative mt-6 md:mt-8">
-                <div className="md:hidden sticky top-3 z-20">
-                  <div className="mx-auto max-w-[520px] bg-white/80 border border-slate-200/70 rounded-full p-1 shadow-lg shadow-slate-200/70 backdrop-blur-xl">
-                    <div className="grid grid-cols-3 gap-1">
+              <nav className="flex flex-col flex-1 overflow-y-auto px-4 py-4 space-y-1.5 custom-scrollbar">
+                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest px-4 mb-4">MENÜ</p>
+                <div
+                  onClick={() => setActiveSection('home')}
+                  className={`flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${activeSection === 'home' ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
+                    }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xl leading-none">✨</span>
+                    <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Anasayfa</span>
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => {
+                    setActiveSection('tasks');
+                    setActiveCategoryId(null); // "Tüm Görevler" görünümü
+                  }}
+                  className={`mt-3 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${activeSection === 'tasks' && !activeCategoryId ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
+                    }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xl leading-none">📝</span>
+                    <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Görevler</span>
+                  </div>
+                </div>
+                {categories.map((cat) => (
+                  <div
+                    key={cat.id}
+                    onClick={(e) => {
+                      // Prevent navigation if clicking on delete button
+                      if ((e.target as HTMLElement).closest('button[data-delete]')) {
+                        return;
+                      }
+                      setActiveSection('tasks');
+                      setActiveCategoryId(cat.id);
+                    }}
+                    className={`group flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${activeSection === 'tasks' && activeCategoryId === cat.id
+                      ? `active-pill text-slate-900 translate-x-1`
+                      : 'hover:bg-white/70 text-slate-700'
+                      }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xl leading-none">{cat.icon}</span>
+                      <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">{cat.name}</span>
+                    </div>
+                    <button
+                      data-delete
+                      onClick={(e) => handleDeleteCategory(cat.id, e)}
+                      className="p-2 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-50 hover:text-rose-600"
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setIsCategoryModalOpen(true)}
+                  className="w-full mt-6 py-4 border-2 border-dashed border-slate-300/70 rounded-3xl text-slate-600 hover:border-indigo-400 transition-all flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest bg-white/70 hover:bg-white btn-glow tap-scale"
+                >
+                  <PlusIcon className="w-4 h-4" /> Yeni Kategori
+                </button>
+                <div
+                  onClick={() => setActiveSection('rentals')}
+                  className={`mt-6 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${activeSection === 'rentals' ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
+                    }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xl leading-none">🏠</span>
+                    <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Kiralar</span>
+                  </div>
+                </div>
+                <div
+                  onClick={() => setActiveSection('assets')}
+                  className={`mt-3 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${activeSection === 'assets' ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
+                    }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xl leading-none">🧰</span>
+                    <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Stok</span>
+                  </div>
+                </div>
+              </nav>
+            </aside>
+
+            {/* Main Content */}
+            <main className="flex-1 p-6 pb-28 lg:pb-12 lg:p-12 overflow-y-auto custom-scrollbar">
+              {activeSection === 'home' ? (
+                <div className="max-w-4xl mx-auto space-y-10">
+                  <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 header-glass p-5 sm:p-6 md:p-8 rounded-[2.5rem] overflow-hidden">
+                    <div className="flex items-center gap-2 md:gap-4 min-w-0 flex-1">
+                      <div className="text-4xl sm:text-5xl md:text-6xl p-5 sm:p-6 md:p-7 rounded-[2.2rem] bg-gradient-to-br from-violet-600 to-blue-500 text-white shadow-2xl shadow-indigo-200/60 transform -rotate-2 float-slow shrink-0">
+                        ✨
+                      </div>
+                      <div className="min-w-0">
+                        <h2 className="text-2xl sm:text-3xl md:text-4xl font-black text-slate-900 tracking-tighter leading-tight truncate">Anasayfa</h2>
+                        <div className="flex items-center gap-2 mt-2">
+                          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                          <p className="text-slate-600 font-black text-[9px] sm:text-[10px] uppercase tracking-[0.18em] md:tracking-[0.2em] leading-snug break-words md:whitespace-nowrap">
+                            {homeStats.active} aktif · {homeStats.completed} tamamlanan · {homeStats.expired} geciken
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="w-full md:w-auto flex flex-wrap items-center gap-2 justify-start md:justify-end">
                       <button
-                        onClick={() => setTaskView('active')}
-                        className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                          taskView === 'active' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                        }`}
+                        onClick={() => setHomeFilterStatus('active')}
+                        className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                          }`}
                       >
                         Aktif
                       </button>
                       <button
-                        onClick={() => setTaskView('completed')}
-                        className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                          taskView === 'completed' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                        }`}
+                        onClick={() => setHomeFilterStatus('completed')}
+                        className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                          }`}
                       >
                         Tamamlanan
                       </button>
                       <button
-                        onClick={() => setTaskView('expired')}
-                        className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                          taskView === 'expired' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                        }`}
+                        onClick={() => setHomeFilterStatus('expired')}
+                        className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                          }`}
                       >
-                        Yapılmayan
+                        Geciken
+                      </button>
+                      <button
+                        onClick={() => setHomeFilterStatus('all')}
+                        className={`px-3 sm:px-4 py-2 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${homeFilterStatus === 'all' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                          }`}
+                      >
+                        Tümü
                       </button>
                     </div>
-                  </div>
-                </div>
+                  </header>
 
-                <div className="hidden md:flex items-center gap-2">
-                  <button
-                    onClick={() => setTaskView('active')}
-                    className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                      taskView === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                    }`}
-                  >
-                    Aktif
-                  </button>
-                  <button
-                    onClick={() => setTaskView('completed')}
-                    className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                      taskView === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                    }`}
-                  >
-                    Tamamlanan
-                  </button>
-                  <button
-                    onClick={() => setTaskView('expired')}
-                    className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                      taskView === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                    }`}
-                  >
-                    Yapılmayan
-                  </button>
-                </div>
-              </div>
-            </header>
-
-            <div className="space-y-4">
-              {visibleTasks.map(task => (
-                <div 
-                  key={task.id} 
-                  onClick={() => {
-                    if (task.categoryId === activeCategoryId && activeCategory?.name === 'Denetim') {
-                      if (task.isCompleted && task.auditResults?.some(result => result.status === 'fail')) {
-                        setActiveAuditReviewTaskId(task.id);
-                        setIsAuditReviewOpen(true);
-                      } else {
-                        openAuditModal(task.id);
-                      }
-                    }
-                  }}
-                  className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center gap-6 justify-between p-6 md:p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${
-                    task.isCompleted ? 'opacity-50 grayscale' : ''
-                  }`}
-                >
-                  {/* Left category bar */}
-                  <div className={`absolute left-0 top-0 bottom-0 w-2 ${activeCategory?.color || 'bg-slate-300'} opacity-80`} />
-
-                  <div className="flex items-start md:items-center gap-5 md:gap-8 flex-1">
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); if (!task.isExpired) toggleTask(task.id); }} 
-                      disabled={task.isExpired}
-                      className={`w-14 h-14 md:w-12 md:h-12 rounded-2xl border flex items-center justify-center transition-all duration-300 touch-manipulation ${
-                        task.isExpired
-                          ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                          : task.isCompleted
-                            ? 'bg-indigo-600 border-indigo-600 text-white'
-                            : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-400 hover:shadow-lg hover:shadow-indigo-100'
-                      }`}
-                    >
-                      {task.isCompleted && <CheckIcon className="w-8 h-8 stroke-[4px]" />}
-                    </button>
-                    <div className="flex flex-col gap-2">
-                      <span className={`text-2xl font-black text-slate-900 tracking-tight transition-all ${task.isCompleted ? 'line-through opacity-60' : ''}`}>
-                        {task.title}
-                      </span>
-                      <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-                        Ekleyen: {users.find(u => u.id === task.createdByUserId)?.name || 'Bilinmiyor'} · Atanan: {users.find(u => u.id === task.assignedToUserId)?.name || 'Bilinmiyor'} · Süre: {task.expectedDuration || '00:00'} · {task.repeat === 'daily' ? 'Her gün' : 'Tek sefer'}
-                      </span>
-                      {task.auditItems && task.auditItems.length > 0 && (
-                        <span className="text-xs font-black text-slate-500 uppercase tracking-widest">
-                          Denetim: {task.auditItems.length} seçenek
-                        </span>
-                      )}
-
-                      <div className="mt-1 flex flex-wrap items-center gap-2">
-                        {task.requiresPhoto && (
-                          <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-cyan-50 text-cyan-700 border border-cyan-200">
-                            Fotoğraf zorunlu
-                          </span>
-                        )}
-                        {task.completionPhotoDataUrl && (
-                          <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            Fotoğraf eklendi
-                          </span>
-                        )}
-                        {task.auditResults && task.auditResults.some(result => result.status === 'fail') && (
-                          <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
-                            Eksikler var
-                          </span>
-                        )}
-                        {task.isExpired && (
-                          <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
-                            Süresi geçti
-                          </span>
-                        )}
+                  {/* Floating-label filter panel (no extra state) */}
+                  <div className="card-glass rounded-[2.5rem] p-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="relative">
+                        <select
+                          value={homeFilterCategory}
+                          onChange={(e) => setHomeFilterCategory(e.target.value)}
+                          className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
+                        >
+                          <option value="all">Tümü</option>
+                          {categories.map(cat => (
+                            <option key={cat.id} value={cat.id}>{cat.name}</option>
+                          ))}
+                        </select>
+                        <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          Kategori
+                        </label>
                       </div>
 
-                      {task.dueAt && !task.isCompleted && !task.isExpired && (
-                        <div className="mt-2">
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
-                              Geri sayım: {formatRemaining(task.dueAt - nowTs)}
-                            </span>
-                          </div>
-                          <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
-                            <div className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500 w-[65%] animate-pulse" />
+                      <div className="relative md:col-span-2">
+                        <input
+                          type="text"
+                          value={homeFilterText}
+                          onChange={(e) => setHomeFilterText(e.target.value)}
+                          placeholder=" "
+                          className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
+                        />
+                        <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          Görev adıyla ara
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    {homeTasks.map(task => {
+                      const category = categories.find(c => c.id === task.categoryId);
+                      const statusLabel = task.isExpired ? 'Geciken' : task.isCompleted ? 'Tamamlandı' : 'Aktif';
+                      const remainingMs = task.dueAt ? task.dueAt - nowTs : 0;
+                      const totalMs = task.dueAt && task.createdAt ? Math.max(1, task.dueAt - task.createdAt) : 1;
+                      const progressPct = task.dueAt ? Math.min(100, Math.max(0, (remainingMs / totalMs) * 100)) : 0;
+                      return (
+                        <div
+                          key={task.id}
+                          className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${task.isExpired ? 'ring-2 ring-rose-300/60' : task.isCompleted ? 'opacity-70' : ''
+                            }`}
+                        >
+                          {/* Left color bar */}
+                          <div className={`absolute left-0 top-0 bottom-0 w-2 ${category?.color || 'bg-slate-300'} opacity-90`} />
+
+                          <div className="flex items-center gap-5">
+                            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${category?.color || 'bg-slate-300'} text-white shadow-md shadow-slate-200`}>
+                              {category?.icon || '📌'}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-2xl font-black text-slate-900 tracking-tight truncate">
+                                {task.title}
+                              </div>
+                              <div className="text-sm font-bold text-slate-500 truncate">
+                                {category?.name || 'Kategori Yok'}
+                              </div>
+
+                              {/* Status + remaining */}
+                              <div className="mt-3 flex flex-wrap items-center gap-2">
+                                <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${task.isExpired
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : task.isCompleted
+                                    ? 'bg-slate-100 text-slate-600 border-slate-200'
+                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  }`}>
+                                  {statusLabel}
+                                </span>
+
+                                {task.dueAt && !task.isCompleted && !task.isExpired && (
+                                  <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
+                                    Kalan: {formatRemaining(task.dueAt - nowTs)}
+                                  </span>
+                                )}
+                              </div>
+
+                              {task.dueAt && !task.isCompleted && !task.isExpired && (
+                                <div className="mt-3">
+                                  <div className="h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
+                                    <div
+                                      className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500"
+                                      style={{ width: `${progressPct}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3 md:gap-4 justify-end">
-                  {task.isCompleted && task.auditResults?.some(result => result.status === 'fail') && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActiveAuditReviewTaskId(task.id);
-                        setIsAuditReviewOpen(true);
-                      }}
-                      className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all"
-                    >
-                      Fotoğrafları Gör
-                    </button>
-                  )}
-                  {task.isExpired && currentUser?.role === 'admin' && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleExtendTask(task.id); }}
-                      className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-amber-50 text-amber-700 hover:bg-amber-100 transition-all"
-                    >
-                      Süreyi Uzat
-                    </button>
-                  )}
-                  {!task.isExpired && !task.isCompleted && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); openEditTaskModal(task.id); }}
-                      className="px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white transition-all tap-scale"
-                    >
-                      Düzenle
-                    </button>
-                  )}
+                      );
+                    })}
 
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); deleteTask(task.id, e); }}
-                    disabled={!isAdmin}
-                    className={`p-3 rounded-2xl transition-all opacity-0 group-hover:opacity-100 ${
-                      !isAdmin ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
-                    }`}
-                  >
-                    <TrashIcon className="w-6 h-6" />
-                  </button>
-                  </div>
-                </div>
-              ))}
-              {visibleTasks.length === 0 && (
-                <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
-                  <div className="text-8xl mb-8 opacity-60 float-slow">✨</div>
-                  <h3 className="text-3xl font-black text-slate-700 tracking-tighter">
-                    {taskView === 'active' ? 'HER ŞEY YOLUNDA!' : taskView === 'completed' ? 'TAMAMLANAN YOK' : 'YAPILMAYAN YOK'}
-                  </h3>
-                  <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
-                    {taskView === 'active' ? 'Bugünlük planların bitti.' : taskView === 'completed' ? 'Henüz tamamlanan görev yok.' : 'Süresi geçen görev yok.'}
-                  </p>
-                </div>
-              )}
-            </div>
-            </div>
-          ) : (
-            <div className="max-w-4xl mx-auto space-y-10">
-              <header className="relative overflow-hidden header-glass p-8 rounded-[2.5rem]">
-                <div className="absolute inset-0 pointer-events-none">
-                  <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
-                  <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-fuchsia-500/10 blur-3xl" />
-                </div>
-
-                <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
-                  <div className="flex items-center gap-2 md:gap-4">
-                    <div className="text-6xl p-7 rounded-[2.2rem] bg-gradient-to-br from-indigo-600 to-blue-500 text-white shadow-2xl shadow-indigo-200/60 transform -rotate-2 float-slow">
-                      📝
-                    </div>
-                    <div>
-                      <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">Görevler</h2>
-                      <div className="flex items-center gap-2 mt-2">
-                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        <p className="text-slate-600 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
-                          {tasksAllFiltered.length} kayıt · {tasksAllFilterCategory === 'all' ? 'Tüm kategoriler' : (categories.find(c => c.id === tasksAllFilterCategory)?.name || 'Kategori')}
+                    {homeTasks.length === 0 && (
+                      <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
+                        <div className="text-8xl mb-8 opacity-60 float-slow">✨</div>
+                        <h3 className="text-3xl font-black text-slate-700 tracking-tighter">BUGÜN İŞ YOK</h3>
+                        <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                          Filtreyi değiştirerek diğer görevleri görebilirsin.
                         </p>
                       </div>
-                    </div>
+                    )}
                   </div>
-
-                  {/* Desktop add button (mobile uses FAB) */}
-                  <button
-                    onClick={() => openCreateTaskModal(tasksAllFilterCategory !== 'all' ? tasksAllFilterCategory : null)}
-                    className="hidden md:flex group items-center gap-4 px-10 py-6 btn-accent btn-glow text-white rounded-[2rem] font-black hover:opacity-95 transition-all tap-scale"
-                  >
-                    <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
-                    GÖREV EKLE
-                  </button>
                 </div>
+              ) : activeSection === 'tasks' ? (
+                activeCategory ? (
+                  <div className="max-w-4xl mx-auto space-y-10">
+                    <header className="relative overflow-hidden header-glass p-8 rounded-[2.5rem]">
+                      <div className="absolute inset-0 pointer-events-none">
+                        <div className={`absolute -top-16 -left-16 h-56 w-56 rounded-full ${activeCategory.color} opacity-20 blur-3xl`} />
+                        <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
+                      </div>
 
-                {/* Segmented control */}
-                <div className="relative mt-6 md:mt-8">
-                  <div className="md:hidden sticky top-3 z-20">
-                    <div className="mx-auto max-w-[520px] bg-white/80 border border-slate-200/70 rounded-full p-1 shadow-lg shadow-slate-200/70 backdrop-blur-xl">
-                      <div className="grid grid-cols-3 gap-1">
+                      <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
+                        <div className="flex items-center gap-2 md:gap-4">
+                          <div className={`text-6xl p-7 rounded-[2.2rem] ${activeCategory.color} text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow`}>
+                            {activeCategory.icon}
+                          </div>
+                          <div>
+                            <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">{activeCategory.name}</h2>
+                            <div className="flex items-center gap-2 mt-2">
+                              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                              <p className="text-slate-600 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
+                                {taskView === 'active' ? activeTasks.length : taskView === 'completed' ? completedTasks.length : expiredTasks.length} {taskView === 'active' ? 'Aktif Görev' : taskView === 'completed' ? 'Tamamlanan Görev' : 'Yapılmayan Görev'}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Desktop add button (mobile uses FAB) */}
                         <button
-                          onClick={() => setTaskView('active')}
-                          className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                            taskView === 'active' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                          }`}
+                          onClick={() => openCreateTaskModal(activeCategoryId)}
+                          className="hidden md:flex group items-center gap-4 px-10 py-6 btn-accent btn-glow text-white rounded-[2rem] font-black hover:opacity-95 transition-all tap-scale"
                         >
-                          Aktif
-                        </button>
-                        <button
-                          onClick={() => setTaskView('completed')}
-                          className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                            taskView === 'completed' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                          }`}
-                        >
-                          Tamamlanan
-                        </button>
-                        <button
-                          onClick={() => setTaskView('expired')}
-                          className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                            taskView === 'expired' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                          }`}
-                        >
-                          Yapılmayan
+                          <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
+                          GÖREV EKLE
                         </button>
                       </div>
-                    </div>
-                  </div>
 
-                  <div className="hidden md:flex items-center gap-2">
-                    <button
-                      onClick={() => setTaskView('active')}
-                      className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                        taskView === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                      }`}
-                    >
-                      Aktif
-                    </button>
-                    <button
-                      onClick={() => setTaskView('completed')}
-                      className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                        taskView === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                      }`}
-                    >
-                      Tamamlanan
-                    </button>
-                    <button
-                      onClick={() => setTaskView('expired')}
-                      className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${
-                        taskView === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                      }`}
-                    >
-                      Yapılmayan
-                    </button>
-                  </div>
-                </div>
-              </header>
-
-              {/* Filters */}
-              <div className="card-glass rounded-[2.5rem] p-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="relative">
-                    <select
-                      value={tasksAllFilterCategory}
-                      onChange={(e) => setTasksAllFilterCategory(e.target.value)}
-                      className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
-                    >
-                      <option value="all">Tüm Kategoriler</option>
-                      {categories.map(cat => (
-                        <option key={cat.id} value={cat.id}>{cat.name}</option>
-                      ))}
-                    </select>
-                    <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                      Kategori
-                    </label>
-                  </div>
-
-                  <div className="relative md:col-span-2">
-                    <input
-                      type="text"
-                      value={tasksAllFilterText}
-                      onChange={(e) => setTasksAllFilterText(e.target.value)}
-                      placeholder=" "
-                      className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
-                    />
-                    <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                      Görev adıyla ara
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                {tasksAllFiltered.map(task => {
-                  const taskCategory = categories.find(c => c.id === task.categoryId);
-                  const isTaskAudit = taskCategory?.name === 'Denetim';
-                  return (
-                    <div
-                      key={task.id}
-                      onClick={() => {
-                        if (isTaskAudit) {
-                          if (task.isCompleted && task.auditResults?.some(result => result.status === 'fail')) {
-                            setActiveAuditReviewTaskId(task.id);
-                            setIsAuditReviewOpen(true);
-                          } else {
-                            openAuditModal(task.id);
-                          }
-                        }
-                      }}
-                      className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center gap-6 justify-between p-6 md:p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${
-                        task.isCompleted ? 'opacity-50 grayscale' : ''
-                      }`}
-                    >
-                      {/* Left category bar */}
-                      <div className={`absolute left-0 top-0 bottom-0 w-2 ${taskCategory?.color || 'bg-slate-300'} opacity-80`} />
-
-                      <div className="flex items-start md:items-center gap-5 md:gap-8 flex-1">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); if (!task.isExpired) toggleTask(task.id); }}
-                          disabled={task.isExpired}
-                          className={`w-14 h-14 md:w-12 md:h-12 rounded-2xl border flex items-center justify-center transition-all duration-300 touch-manipulation ${
-                            task.isExpired
-                              ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                              : task.isCompleted
-                                ? 'bg-indigo-600 border-indigo-600 text-white'
-                                : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-400 hover:shadow-lg hover:shadow-indigo-100'
-                          }`}
-                        >
-                          {task.isCompleted && <CheckIcon className="w-8 h-8 stroke-[4px]" />}
-                        </button>
-                        <div className="flex flex-col gap-2 min-w-0">
-                          <span className={`text-2xl font-black text-slate-900 tracking-tight transition-all truncate ${task.isCompleted ? 'line-through opacity-60' : ''}`}>
-                            {task.title}
-                          </span>
-                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">
-                            {taskCategory ? `${taskCategory.icon} ${taskCategory.name}` : 'Kategori Yok'}
-                          </span>
-                          <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-                            Ekleyen: {users.find(u => u.id === task.createdByUserId)?.name || 'Bilinmiyor'} · Atanan: {users.find(u => u.id === task.assignedToUserId)?.name || 'Bilinmiyor'} · Süre: {task.expectedDuration || '00:00'} · {task.repeat === 'daily' ? 'Her gün' : 'Tek sefer'}
-                          </span>
-
-                          {task.auditItems && task.auditItems.length > 0 && (
-                            <span className="text-xs font-black text-slate-500 uppercase tracking-widest">
-                              Denetim: {task.auditItems.length} seçenek
-                            </span>
-                          )}
-
-                          <div className="mt-1 flex flex-wrap items-center gap-2">
-                            {task.requiresPhoto && (
-                              <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-cyan-50 text-cyan-700 border border-cyan-200">
-                                Fotoğraf zorunlu
-                              </span>
-                            )}
-                            {task.completionPhotoDataUrl && (
-                              <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                Fotoğraf eklendi
-                              </span>
-                            )}
-                            {task.auditResults && task.auditResults.some(result => result.status === 'fail') && (
-                              <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
-                                Eksikler var
-                              </span>
-                            )}
-                            {task.isExpired && (
-                              <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
-                                Süresi geçti
-                              </span>
-                            )}
-                          </div>
-
-                          {task.dueAt && !task.isCompleted && !task.isExpired && (
-                            <div className="mt-2">
-                              <div className="flex items-center justify-between gap-3">
-                                <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
-                                  Geri sayım: {formatRemaining(task.dueAt - nowTs)}
-                                </span>
-                              </div>
-                              <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
-                                <div className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500 w-[65%] animate-pulse" />
-                              </div>
+                      {/* Segmented control (sticky on mobile) */}
+                      <div className="relative mt-6 md:mt-8">
+                        <div className="md:hidden sticky top-3 z-20">
+                          <div className="mx-auto max-w-[520px] bg-white/80 border border-slate-200/70 rounded-full p-1 shadow-lg shadow-slate-200/70 backdrop-blur-xl">
+                            <div className="grid grid-cols-3 gap-1">
+                              <button
+                                onClick={() => setTaskView('active')}
+                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                                  }`}
+                              >
+                                Aktif
+                              </button>
+                              <button
+                                onClick={() => setTaskView('completed')}
+                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                                  }`}
+                              >
+                                Tamamlanan
+                              </button>
+                              <button
+                                onClick={() => setTaskView('expired')}
+                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                                  }`}
+                              >
+                                Yapılmayan
+                              </button>
                             </div>
-                          )}
+                          </div>
+                        </div>
+
+                        <div className="hidden md:flex items-center gap-2">
+                          <button
+                            onClick={() => setTaskView('active')}
+                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                              }`}
+                          >
+                            Aktif
+                          </button>
+                          <button
+                            onClick={() => setTaskView('completed')}
+                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                              }`}
+                          >
+                            Tamamlanan
+                          </button>
+                          <button
+                            onClick={() => setTaskView('expired')}
+                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                              }`}
+                          >
+                            Yapılmayan
+                          </button>
                         </div>
                       </div>
+                    </header>
 
-                      <div className="flex flex-wrap items-center gap-3 md:gap-4 justify-end">
-                        {task.isCompleted && task.auditResults?.some(result => result.status === 'fail') && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setActiveAuditReviewTaskId(task.id);
-                              setIsAuditReviewOpen(true);
-                            }}
-                            className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all"
-                          >
-                            Fotoğrafları Gör
-                          </button>
-                        )}
-                        {task.isExpired && currentUser?.role === 'admin' && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleExtendTask(task.id); }}
-                            className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-amber-50 text-amber-700 hover:bg-amber-100 transition-all"
-                          >
-                            Süreyi Uzat
-                          </button>
-                        )}
-                        {!task.isExpired && !task.isCompleted && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); openEditTaskModal(task.id); }}
-                            className="px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white transition-all tap-scale"
-                          >
-                            Düzenle
-                          </button>
-                        )}
+                    <div className="space-y-4">
+                      {visibleTasks.map(task => (
+                        <div
+                          key={task.id}
+                          onClick={() => {
+                            if (task.categoryId === activeCategoryId && activeCategory?.name === 'Denetim') {
+                              if (task.isCompleted && task.auditResults?.some(result => result.status === 'fail')) {
+                                setActiveAuditReviewTaskId(task.id);
+                                setIsAuditReviewOpen(true);
+                              } else {
+                                openAuditModal(task.id);
+                              }
+                            }
+                          }}
+                          className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center gap-6 justify-between p-6 md:p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${task.isCompleted ? 'opacity-50 grayscale' : ''
+                            }`}
+                        >
+                          {/* Left category bar */}
+                          <div className={`absolute left-0 top-0 bottom-0 w-2 ${activeCategory?.color || 'bg-slate-300'} opacity-80`} />
 
+                          <div className="flex items-start md:items-center gap-5 md:gap-8 flex-1">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); if (!task.isExpired) toggleTask(task.id); }}
+                              disabled={task.isExpired}
+                              className={`w-14 h-14 md:w-12 md:h-12 rounded-2xl border flex items-center justify-center transition-all duration-300 touch-manipulation ${task.isExpired
+                                ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                                : task.isCompleted
+                                  ? 'bg-indigo-600 border-indigo-600 text-white'
+                                  : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-400 hover:shadow-lg hover:shadow-indigo-100'
+                                }`}
+                            >
+                              {task.isCompleted && <CheckIcon className="w-8 h-8 stroke-[4px]" />}
+                            </button>
+                            <div className="flex flex-col gap-2">
+                              <span className={`text-2xl font-black text-slate-900 tracking-tight transition-all ${task.isCompleted ? 'line-through opacity-60' : ''}`}>
+                                {task.title}
+                              </span>
+                              <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                                Ekleyen: {users.find(u => u.id === task.createdByUserId)?.name || 'Bilinmiyor'} · Atanan: {users.find(u => u.id === task.assignedToUserId)?.name || 'Bilinmiyor'} · Süre: {task.expectedDuration || '00:00'} · {task.repeat === 'daily' ? 'Her gün' : 'Tek sefer'}
+                              </span>
+                              {task.auditItems && task.auditItems.length > 0 && (
+                                <span className="text-xs font-black text-slate-500 uppercase tracking-widest">
+                                  Denetim: {task.auditItems.length} seçenek
+                                </span>
+                              )}
+
+                              <div className="mt-1 flex flex-wrap items-center gap-2">
+                                {task.requiresPhoto && (
+                                  <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-cyan-50 text-cyan-700 border border-cyan-200">
+                                    Fotoğraf zorunlu
+                                  </span>
+                                )}
+                                {task.completionPhotoDataUrl && (
+                                  <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    Fotoğraf eklendi
+                                  </span>
+                                )}
+                                {task.auditResults && task.auditResults.some(result => result.status === 'fail') && (
+                                  <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
+                                    Eksikler var
+                                  </span>
+                                )}
+                                {task.isExpired && (
+                                  <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
+                                    Süresi geçti
+                                  </span>
+                                )}
+                              </div>
+
+                              {task.dueAt && !task.isCompleted && !task.isExpired && (
+                                <div className="mt-2">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
+                                      Geri sayım: {formatRemaining(task.dueAt - nowTs)}
+                                    </span>
+                                  </div>
+                                  <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
+                                    <div className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500 w-[65%] animate-pulse" />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-3 md:gap-4 justify-end">
+                            {task.isCompleted && task.auditResults?.some(result => result.status === 'fail') && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveAuditReviewTaskId(task.id);
+                                  setIsAuditReviewOpen(true);
+                                }}
+                                className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all"
+                              >
+                                Fotoğrafları Gör
+                              </button>
+                            )}
+                            {task.isExpired && currentUser?.role === 'admin' && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleExtendTask(task.id); }}
+                                className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-amber-50 text-amber-700 hover:bg-amber-100 transition-all"
+                              >
+                                Süreyi Uzat
+                              </button>
+                            )}
+                            {!task.isExpired && !task.isCompleted && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); openEditTaskModal(task.id); }}
+                                className="px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white transition-all tap-scale"
+                              >
+                                Düzenle
+                              </button>
+                            )}
+
+                            <button
+                              onClick={(e) => { e.stopPropagation(); deleteTask(task.id, e); }}
+                              disabled={!isAdmin}
+                              className={`p-3 rounded-2xl transition-all opacity-0 group-hover:opacity-100 ${!isAdmin ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                                }`}
+                            >
+                              <TrashIcon className="w-6 h-6" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                      {visibleTasks.length === 0 && (
+                        <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
+                          <div className="text-8xl mb-8 opacity-60 float-slow">✨</div>
+                          <h3 className="text-3xl font-black text-slate-700 tracking-tighter">
+                            {taskView === 'active' ? 'HER ŞEY YOLUNDA!' : taskView === 'completed' ? 'TAMAMLANAN YOK' : 'YAPILMAYAN YOK'}
+                          </h3>
+                          <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                            {taskView === 'active' ? 'Bugünlük planların bitti.' : taskView === 'completed' ? 'Henüz tamamlanan görev yok.' : 'Süresi geçen görev yok.'}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="max-w-4xl mx-auto space-y-10">
+                    <header className="relative overflow-hidden header-glass p-8 rounded-[2.5rem]">
+                      <div className="absolute inset-0 pointer-events-none">
+                        <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
+                        <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-fuchsia-500/10 blur-3xl" />
+                      </div>
+
+                      <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
+                        <div className="flex items-center gap-2 md:gap-4">
+                          <div className="text-6xl p-7 rounded-[2.2rem] bg-gradient-to-br from-indigo-600 to-blue-500 text-white shadow-2xl shadow-indigo-200/60 transform -rotate-2 float-slow">
+                            📝
+                          </div>
+                          <div>
+                            <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">Görevler</h2>
+                            <div className="flex items-center gap-2 mt-2">
+                              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                              <p className="text-slate-600 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
+                                {tasksAllFiltered.length} kayıt · {tasksAllFilterCategory === 'all' ? 'Tüm kategoriler' : (categories.find(c => c.id === tasksAllFilterCategory)?.name || 'Kategori')}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Desktop add button (mobile uses FAB) */}
                         <button
-                          onClick={(e) => { e.stopPropagation(); deleteTask(task.id, e); }}
-                          disabled={!isAdmin}
-                          className={`p-3 rounded-2xl transition-all opacity-0 group-hover:opacity-100 ${
-                            !isAdmin ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
-                          }`}
+                          onClick={() => openCreateTaskModal(tasksAllFilterCategory !== 'all' ? tasksAllFilterCategory : null)}
+                          className="hidden md:flex group items-center gap-4 px-10 py-6 btn-accent btn-glow text-white rounded-[2rem] font-black hover:opacity-95 transition-all tap-scale"
+                        >
+                          <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
+                          GÖREV EKLE
+                        </button>
+                      </div>
+
+                      {/* Segmented control */}
+                      <div className="relative mt-6 md:mt-8">
+                        <div className="md:hidden sticky top-3 z-20">
+                          <div className="mx-auto max-w-[520px] bg-white/80 border border-slate-200/70 rounded-full p-1 shadow-lg shadow-slate-200/70 backdrop-blur-xl">
+                            <div className="grid grid-cols-3 gap-1">
+                              <button
+                                onClick={() => setTaskView('active')}
+                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                                  }`}
+                              >
+                                Aktif
+                              </button>
+                              <button
+                                onClick={() => setTaskView('completed')}
+                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                                  }`}
+                              >
+                                Tamamlanan
+                              </button>
+                              <button
+                                onClick={() => setTaskView('expired')}
+                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                                  }`}
+                              >
+                                Yapılmayan
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="hidden md:flex items-center gap-2">
+                          <button
+                            onClick={() => setTaskView('active')}
+                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                              }`}
+                          >
+                            Aktif
+                          </button>
+                          <button
+                            onClick={() => setTaskView('completed')}
+                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                              }`}
+                          >
+                            Tamamlanan
+                          </button>
+                          <button
+                            onClick={() => setTaskView('expired')}
+                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                              }`}
+                          >
+                            Yapılmayan
+                          </button>
+                        </div>
+                      </div>
+                    </header>
+
+                    {/* Filters */}
+                    <div className="card-glass rounded-[2.5rem] p-6">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="relative">
+                          <select
+                            value={tasksAllFilterCategory}
+                            onChange={(e) => setTasksAllFilterCategory(e.target.value)}
+                            className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
+                          >
+                            <option value="all">Tüm Kategoriler</option>
+                            {categories.map(cat => (
+                              <option key={cat.id} value={cat.id}>{cat.name}</option>
+                            ))}
+                          </select>
+                          <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                            Kategori
+                          </label>
+                        </div>
+
+                        <div className="relative md:col-span-2">
+                          <input
+                            type="text"
+                            value={tasksAllFilterText}
+                            onChange={(e) => setTasksAllFilterText(e.target.value)}
+                            placeholder=" "
+                            className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
+                          />
+                          <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                            Görev adıyla ara
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      {tasksAllFiltered.map(task => {
+                        const taskCategory = categories.find(c => c.id === task.categoryId);
+                        const isTaskAudit = taskCategory?.name === 'Denetim';
+                        return (
+                          <div
+                            key={task.id}
+                            onClick={() => {
+                              if (isTaskAudit) {
+                                if (task.isCompleted && task.auditResults?.some(result => result.status === 'fail')) {
+                                  setActiveAuditReviewTaskId(task.id);
+                                  setIsAuditReviewOpen(true);
+                                } else {
+                                  openAuditModal(task.id);
+                                }
+                              }
+                            }}
+                            className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center gap-6 justify-between p-6 md:p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${task.isCompleted ? 'opacity-50 grayscale' : ''
+                              }`}
+                          >
+                            {/* Left category bar */}
+                            <div className={`absolute left-0 top-0 bottom-0 w-2 ${taskCategory?.color || 'bg-slate-300'} opacity-80`} />
+
+                            <div className="flex items-start md:items-center gap-5 md:gap-8 flex-1">
+                              <button
+                                onClick={(e) => { e.stopPropagation(); if (!task.isExpired) toggleTask(task.id); }}
+                                disabled={task.isExpired}
+                                className={`w-14 h-14 md:w-12 md:h-12 rounded-2xl border flex items-center justify-center transition-all duration-300 touch-manipulation ${task.isExpired
+                                  ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
+                                  : task.isCompleted
+                                    ? 'bg-indigo-600 border-indigo-600 text-white'
+                                    : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-400 hover:shadow-lg hover:shadow-indigo-100'
+                                  }`}
+                              >
+                                {task.isCompleted && <CheckIcon className="w-8 h-8 stroke-[4px]" />}
+                              </button>
+                              <div className="flex flex-col gap-2 min-w-0">
+                                <span className={`text-2xl font-black text-slate-900 tracking-tight transition-all truncate ${task.isCompleted ? 'line-through opacity-60' : ''}`}>
+                                  {task.title}
+                                </span>
+                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">
+                                  {taskCategory ? `${taskCategory.icon} ${taskCategory.name}` : 'Kategori Yok'}
+                                </span>
+                                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                                  Ekleyen: {users.find(u => u.id === task.createdByUserId)?.name || 'Bilinmiyor'} · Atanan: {users.find(u => u.id === task.assignedToUserId)?.name || 'Bilinmiyor'} · Süre: {task.expectedDuration || '00:00'} · {task.repeat === 'daily' ? 'Her gün' : 'Tek sefer'}
+                                </span>
+
+                                {task.auditItems && task.auditItems.length > 0 && (
+                                  <span className="text-xs font-black text-slate-500 uppercase tracking-widest">
+                                    Denetim: {task.auditItems.length} seçenek
+                                  </span>
+                                )}
+
+                                <div className="mt-1 flex flex-wrap items-center gap-2">
+                                  {task.requiresPhoto && (
+                                    <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-cyan-50 text-cyan-700 border border-cyan-200">
+                                      Fotoğraf zorunlu
+                                    </span>
+                                  )}
+                                  {task.completionPhotoDataUrl && (
+                                    <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                      Fotoğraf eklendi
+                                    </span>
+                                  )}
+                                  {task.auditResults && task.auditResults.some(result => result.status === 'fail') && (
+                                    <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
+                                      Eksikler var
+                                    </span>
+                                  )}
+                                  {task.isExpired && (
+                                    <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
+                                      Süresi geçti
+                                    </span>
+                                  )}
+                                </div>
+
+                                {task.dueAt && !task.isCompleted && !task.isExpired && (
+                                  <div className="mt-2">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
+                                        Geri sayım: {formatRemaining(task.dueAt - nowTs)}
+                                      </span>
+                                    </div>
+                                    <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
+                                      <div className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500 w-[65%] animate-pulse" />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-3 md:gap-4 justify-end">
+                              {task.isCompleted && task.auditResults?.some(result => result.status === 'fail') && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveAuditReviewTaskId(task.id);
+                                    setIsAuditReviewOpen(true);
+                                  }}
+                                  className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all"
+                                >
+                                  Fotoğrafları Gör
+                                </button>
+                              )}
+                              {task.isExpired && currentUser?.role === 'admin' && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleExtendTask(task.id); }}
+                                  className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-amber-50 text-amber-700 hover:bg-amber-100 transition-all"
+                                >
+                                  Süreyi Uzat
+                                </button>
+                              )}
+                              {!task.isExpired && !task.isCompleted && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); openEditTaskModal(task.id); }}
+                                  className="px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white transition-all tap-scale"
+                                >
+                                  Düzenle
+                                </button>
+                              )}
+
+                              <button
+                                onClick={(e) => { e.stopPropagation(); deleteTask(task.id, e); }}
+                                disabled={!isAdmin}
+                                className={`p-3 rounded-2xl transition-all opacity-0 group-hover:opacity-100 ${!isAdmin ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                                  }`}
+                              >
+                                <TrashIcon className="w-6 h-6" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {tasksAllFiltered.length === 0 && (
+                        <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
+                          <div className="text-8xl mb-8 opacity-60 float-slow">📝</div>
+                          <h3 className="text-3xl font-black text-slate-700 tracking-tighter">
+                            {taskView === 'active' ? 'AKTİF GÖREV YOK' : taskView === 'completed' ? 'TAMAMLANAN YOK' : 'YAPILMAYAN YOK'}
+                          </h3>
+                          <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                            Filtreyi değiştirerek diğer görevleri görebilirsin.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              ) : activeSection === 'rentals' ? (
+                <div className="max-w-4xl mx-auto space-y-10">
+                  <header className="relative overflow-hidden header-glass p-10 rounded-[3rem]">
+                    <div className="absolute inset-0 pointer-events-none">
+                      <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-emerald-500/10 blur-3xl" />
+                      <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-cyan-500/10 blur-3xl" />
+                    </div>
+                    <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-8">
+                      <div className="flex items-center gap-2 md:gap-4">
+                        <div className="text-6xl p-8 rounded-[2.5rem] bg-emerald-500 text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow">
+                          🏠
+                        </div>
+                        <div>
+                          <h2 className="text-4xl font-black text-slate-800 tracking-tighter">Kiralar</h2>
+                          <div className="flex items-center gap-2 mt-2">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                            <p className="text-slate-400 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
+                              {rentalsWithStatus.length} kayıt
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setIsRentalModalOpen(true)}
+                        className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-95 transition-all active:scale-95 shadow-emerald-200 btn-glow"
+                      >
+                        <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
+                        KİRA EKLE
+                      </button>
+                    </div>
+                  </header>
+
+                  <div className="space-y-4">
+                    {rentalsWithStatus.map(rental => {
+                      const isOverdue = rental.overdueDays >= 3 && !rental.isPaidForMonth;
+                      return (
+                        <div
+                          key={rental.id}
+                          className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${isOverdue ? 'ring-2 ring-rose-300/60' : ''
+                            }`}
+                        >
+                          {/* left accent */}
+                          <div className={`absolute left-0 top-0 bottom-0 w-2 ${rental.isPaidForMonth ? 'bg-emerald-500' : isOverdue ? 'bg-rose-500' : 'bg-amber-500'} opacity-80`} />
+
+                          <div className="flex items-center gap-6">
+                            <div className="relative">
+                              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${rental.isPaidForMonth ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-amber-100 text-amber-700 border border-amber-200'
+                                }`}>
+                                {rental.isPaidForMonth ? '✅' : '⏳'}
+                              </div>
+                              {isOverdue && (
+                                <div className="absolute -inset-1 rounded-[1.2rem] ring-2 ring-rose-300/70 animate-pulse" />
+                              )}
+                            </div>
+                            <div>
+                              <div className="text-2xl font-black text-slate-800 tracking-tight">
+                                Daire {rental.unitNumber}
+                              </div>
+                              <div className="text-sm font-bold text-slate-500">
+                                {rental.tenantName}
+                              </div>
+                              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-2">
+                                Kira günü: {rental.dueDay} · Tutar: {formatCurrency(rental.amount)}
+                              </div>
+                              {rental.isPaidForMonth && (
+                                <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mt-2">
+                                  Ödemeyi alan:{' '}
+                                  {users.find(u => u.id === rental.paidByUserId)?.name || 'Bilinmiyor'}
+                                </div>
+                              )}
+                              {isOverdue && (
+                                <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-black uppercase tracking-widest">
+                                  {rental.overdueDays} gün gecikmede
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={() => toggleRentalPaid(rental.id)}
+                              className={`px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all tap-scale ${rental.isPaidForMonth
+                                ? 'bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white'
+                                : 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-200'
+                                }`}
+                            >
+                              {rental.isPaidForMonth ? 'Ödeme İptal' : 'Ödendi'}
+                            </button>
+                            <button
+                              onClick={() => deleteRental(rental.id)}
+                              className="p-3 rounded-2xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all"
+                              title="Sil"
+                            >
+                              <TrashIcon className="w-6 h-6" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {rentalsWithStatus.length === 0 && (
+                      <div className="text-center py-44 card-glass rounded-[4rem] border-2 border-dashed border-slate-200/70">
+                        <div className="text-8xl mb-8 opacity-60 float-slow">🏠</div>
+                        <h3 className="text-3xl font-black text-slate-700 tracking-tighter">KİRA KAYDI YOK</h3>
+                        <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                          İlk kira kaydını ekleyin.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="max-w-4xl mx-auto space-y-10">
+                  <header className="relative overflow-hidden header-glass p-10 rounded-[3rem]">
+                    <div className="absolute inset-0 pointer-events-none">
+                      <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-sky-500/10 blur-3xl" />
+                      <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
+                    </div>
+                    <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-8">
+                      <div className="flex items-center gap-2 md:gap-4">
+                        <div className="text-6xl p-8 rounded-[2.5rem] bg-sky-500 text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow">
+                          🧰
+                        </div>
+                        <div>
+                          <h2 className="text-4xl font-black text-slate-800 tracking-tighter">Stok</h2>
+                          <div className="flex items-center gap-2 mt-2">
+                            <div className="w-2 h-2 rounded-full bg-sky-500 animate-pulse" />
+                            <p className="text-slate-400 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
+                              {filteredAssets.length} kayıt
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setIsAssetModalOpen(true)}
+                        className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-sky-500 via-blue-500 to-indigo-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-95 transition-all active:scale-95 shadow-sky-200 btn-glow"
+                      >
+                        <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
+                        STOK EKLE
+                      </button>
+                    </div>
+                  </header>
+
+                  <div className="sticky top-4 z-10 card-glass rounded-[2.5rem] border border-slate-200/70 shadow-lg p-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={assetFilterRoom}
+                          onChange={(e) => setAssetFilterRoom(e.target.value)}
+                          placeholder=" "
+                          className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-500 font-black text-slate-700"
+                        />
+                        <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                          Oda filtresi
+                        </label>
+                      </div>
+                      <div className="relative md:col-span-2">
+                        <input
+                          type="text"
+                          value={assetFilterText}
+                          onChange={(e) => setAssetFilterText(e.target.value)}
+                          placeholder=" "
+                          className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-500 font-black text-slate-700"
+                        />
+                        <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                          Arama
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    {filteredAssets.map(item => (
+                      <div
+                        key={item.id}
+                        className="group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow"
+                      >
+                        <div className="absolute left-0 top-0 bottom-0 w-2 bg-sky-500 opacity-30" />
+                        <div className="flex items-center gap-6">
+                          <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl bg-sky-100 text-sky-700 border border-sky-200">
+                            📦
+                          </div>
+                          <div>
+                            <div className="text-2xl font-black text-slate-800 tracking-tight">
+                              {item.name}
+                            </div>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-black uppercase tracking-widest">
+                                {item.room}
+                              </span>
+                              <span className="px-3 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-[10px] font-black uppercase tracking-widest">
+                                {formatDateDisplay(item.assignedAt)}
+                              </span>
+                            </div>
+                            {item.note && (
+                              <div className="text-xs font-black text-slate-500 uppercase tracking-widest mt-3">
+                                {item.note}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => deleteAsset(item.id)}
+                          className="p-3 rounded-2xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all"
+                          title="Sil"
                         >
                           <TrashIcon className="w-6 h-6" />
                         </button>
                       </div>
-                    </div>
-                  );
-                })}
+                    ))}
 
-                {tasksAllFiltered.length === 0 && (
-                  <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
-                    <div className="text-8xl mb-8 opacity-60 float-slow">📝</div>
-                    <h3 className="text-3xl font-black text-slate-700 tracking-tighter">
-                      {taskView === 'active' ? 'AKTİF GÖREV YOK' : taskView === 'completed' ? 'TAMAMLANAN YOK' : 'YAPILMAYAN YOK'}
-                    </h3>
-                    <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
-                      Filtreyi değiştirerek diğer görevleri görebilirsin.
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          )
-        ) : activeSection === 'rentals' ? (
-          <div className="max-w-4xl mx-auto space-y-10">
-            <header className="relative overflow-hidden header-glass p-10 rounded-[3rem]">
-              <div className="absolute inset-0 pointer-events-none">
-                <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-emerald-500/10 blur-3xl" />
-                <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-cyan-500/10 blur-3xl" />
-              </div>
-              <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-8">
-              <div className="flex items-center gap-2 md:gap-4">
-                <div className="text-6xl p-8 rounded-[2.5rem] bg-emerald-500 text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow">
-                  🏠
-                </div>
-                <div>
-                  <h2 className="text-4xl font-black text-slate-800 tracking-tighter">Kiralar</h2>
-                  <div className="flex items-center gap-2 mt-2">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <p className="text-slate-400 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
-                      {rentalsWithStatus.length} kayıt
-                    </p>
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => setIsRentalModalOpen(true)}
-                className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-95 transition-all active:scale-95 shadow-emerald-200 btn-glow"
-              >
-                <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
-                KİRA EKLE
-              </button>
-              </div>
-            </header>
-
-            <div className="space-y-4">
-              {rentalsWithStatus.map(rental => {
-                const isOverdue = rental.overdueDays >= 3 && !rental.isPaidForMonth;
-                return (
-                  <div
-                    key={rental.id}
-                    className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${
-                      isOverdue ? 'ring-2 ring-rose-300/60' : ''
-                    }`}
-                  >
-                    {/* left accent */}
-                    <div className={`absolute left-0 top-0 bottom-0 w-2 ${rental.isPaidForMonth ? 'bg-emerald-500' : isOverdue ? 'bg-rose-500' : 'bg-amber-500'} opacity-80`} />
-
-                    <div className="flex items-center gap-6">
-                      <div className="relative">
-                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl ${
-                          rental.isPaidForMonth ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-amber-100 text-amber-700 border border-amber-200'
-                        }`}>
-                          {rental.isPaidForMonth ? '✅' : '⏳'}
-                        </div>
-                        {isOverdue && (
-                          <div className="absolute -inset-1 rounded-[1.2rem] ring-2 ring-rose-300/70 animate-pulse" />
-                        )}
+                    {filteredAssets.length === 0 && (
+                      <div className="text-center py-44 card-glass rounded-[4rem] border-2 border-dashed border-slate-200/70">
+                        <div className="text-8xl mb-8 opacity-60 float-slow">🧰</div>
+                        <h3 className="text-3xl font-black text-slate-700 tracking-tighter">STOK YOK</h3>
+                        <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                          İlk stok kaydını ekleyin.
+                        </p>
                       </div>
-                      <div>
-                        <div className="text-2xl font-black text-slate-800 tracking-tight">
-                          Daire {rental.unitNumber}
-                        </div>
-                        <div className="text-sm font-bold text-slate-500">
-                          {rental.tenantName}
-                        </div>
-                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-2">
-                          Kira günü: {rental.dueDay} · Tutar: {formatCurrency(rental.amount)}
-                        </div>
-                        {rental.isPaidForMonth && (
-                          <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mt-2">
-                            Ödemeyi alan:{' '}
-                            {users.find(u => u.id === rental.paidByUserId)?.name || 'Bilinmiyor'}
-                          </div>
-                        )}
-                        {isOverdue && (
-                          <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-black uppercase tracking-widest">
-                            {rental.overdueDays} gün gecikmede
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => toggleRentalPaid(rental.id)}
-                        className={`px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all tap-scale ${
-                          rental.isPaidForMonth
-                            ? 'bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white'
-                            : 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-200'
-                        }`}
-                      >
-                        {rental.isPaidForMonth ? 'Ödeme İptal' : 'Ödendi'}
-                      </button>
-                      <button
-                        onClick={() => deleteRental(rental.id)}
-                        className="p-3 rounded-2xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all"
-                        title="Sil"
-                      >
-                        <TrashIcon className="w-6 h-6" />
-                      </button>
-                    </div>
+                    )}
                   </div>
-                );
-              })}
-
-              {rentalsWithStatus.length === 0 && (
-                <div className="text-center py-44 card-glass rounded-[4rem] border-2 border-dashed border-slate-200/70">
-                  <div className="text-8xl mb-8 opacity-60 float-slow">🏠</div>
-                  <h3 className="text-3xl font-black text-slate-700 tracking-tighter">KİRA KAYDI YOK</h3>
-                  <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
-                    İlk kira kaydını ekleyin.
-                  </p>
                 </div>
               )}
-            </div>
-          </div>
-        ) : (
-          <div className="max-w-4xl mx-auto space-y-10">
-            <header className="relative overflow-hidden header-glass p-10 rounded-[3rem]">
-              <div className="absolute inset-0 pointer-events-none">
-                <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-sky-500/10 blur-3xl" />
-                <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
-              </div>
-              <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-8">
-              <div className="flex items-center gap-2 md:gap-4">
-                <div className="text-6xl p-8 rounded-[2.5rem] bg-sky-500 text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow">
-                  🧰
-                </div>
-                <div>
-                  <h2 className="text-4xl font-black text-slate-800 tracking-tighter">Stok</h2>
-                  <div className="flex items-center gap-2 mt-2">
-                    <div className="w-2 h-2 rounded-full bg-sky-500 animate-pulse" />
-                    <p className="text-slate-400 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
-                      {filteredAssets.length} kayıt
-                    </p>
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => setIsAssetModalOpen(true)}
-                className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-sky-500 via-blue-500 to-indigo-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-95 transition-all active:scale-95 shadow-sky-200 btn-glow"
-              >
-                <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
-                STOK EKLE
-              </button>
-              </div>
-            </header>
+            </main>
 
-            <div className="sticky top-4 z-10 card-glass rounded-[2.5rem] border border-slate-200/70 shadow-lg p-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={assetFilterRoom}
-                    onChange={(e) => setAssetFilterRoom(e.target.value)}
-                    placeholder=" "
-                    className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-500 font-black text-slate-700"
-                  />
-                  <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                    Oda filtresi
-                  </label>
-                </div>
-                <div className="relative md:col-span-2">
-                  <input
-                    type="text"
-                    value={assetFilterText}
-                    onChange={(e) => setAssetFilterText(e.target.value)}
-                    placeholder=" "
-                    className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-500 font-black text-slate-700"
-                  />
-                  <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                    Arama
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              {filteredAssets.map(item => (
-                <div
-                  key={item.id}
-                  className="group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow"
-                >
-                  <div className="absolute left-0 top-0 bottom-0 w-2 bg-sky-500 opacity-30" />
-                  <div className="flex items-center gap-6">
-                    <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl bg-sky-100 text-sky-700 border border-sky-200">
-                      📦
-                    </div>
-                    <div>
-                      <div className="text-2xl font-black text-slate-800 tracking-tight">
-                        {item.name}
-                      </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-black uppercase tracking-widest">
-                          {item.room}
-                        </span>
-                        <span className="px-3 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 text-[10px] font-black uppercase tracking-widest">
-                          {formatDateDisplay(item.assignedAt)}
-                        </span>
-                      </div>
-                      {item.note && (
-                        <div className="text-xs font-black text-slate-500 uppercase tracking-widest mt-3">
-                          {item.note}
-                        </div>
-                      )}
-                    </div>
-                  </div>
+            {/* Mobile Tab Bar (no sidebar) */}
+            <div className="lg:hidden fixed bottom-0 left-0 right-0 z-50 px-4 pb-4">
+              <div className="tabbar rounded-[2.25rem] px-4 py-3">
+                <div className="grid grid-cols-5 items-center">
                   <button
-                    onClick={() => deleteAsset(item.id)}
-                    className="p-3 rounded-2xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all"
-                    title="Sil"
+                    onClick={() => setActiveSection('home')}
+                    className={`tabbar-item ${activeSection === 'home' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
                   >
-                    <TrashIcon className="w-6 h-6" />
+                    <div className={`text-xl ${activeSection === 'home' ? 'text-indigo-600' : 'text-slate-500'}`}>✨</div>
+                    <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'home' ? 'text-indigo-700' : 'text-slate-500'}`}>Anasayfa</div>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setActiveSection('tasks');
+                      setActiveCategoryId(null); // "Tüm Görevler" görünümü
+                    }}
+                    className={`tabbar-item ${activeSection === 'tasks' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
+                  >
+                    <div className={`text-xl ${activeSection === 'tasks' ? 'text-indigo-600' : 'text-slate-500'}`}>📝</div>
+                    <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'tasks' ? 'text-indigo-700' : 'text-slate-500'}`}>Görevler</div>
+                  </button>
+
+                  {/* Context FAB */}
+                  <div className="relative flex items-center justify-center">
+                    <button
+                      onClick={() => {
+                        if (activeSection === 'rentals') {
+                          setIsRentalModalOpen(true);
+                          return;
+                        }
+                        if (activeSection === 'assets') {
+                          setIsAssetModalOpen(true);
+                          return;
+                        }
+                        if (activeSection === 'tasks') {
+                          openCreateTaskModal(activeCategoryId);
+                          return;
+                        }
+                        // home
+                        if (!activeCategoryId && categories.length) {
+                          setActiveSection('tasks');
+                          setActiveCategoryId(categories[0].id);
+                          openCreateTaskModal(categories[0].id);
+                          return;
+                        }
+                        if (!categories.length) {
+                          setIsCategoryModalOpen(true);
+                          return;
+                        }
+                        setActiveSection('tasks');
+                        openCreateTaskModal(activeCategoryId || categories[0]?.id || null);
+                      }}
+                      className="relative fab fab-pulse w-14 h-14 rounded-full flex items-center justify-center text-white font-black text-2xl -mt-8 shadow-xl"
+                      aria-label="Add"
+                      title="Ekle"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => setActiveSection('rentals')}
+                    className={`tabbar-item ${activeSection === 'rentals' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
+                  >
+                    <div className={`text-xl ${activeSection === 'rentals' ? 'text-emerald-600' : 'text-slate-500'}`}>🏠</div>
+                    <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'rentals' ? 'text-emerald-700' : 'text-slate-500'}`}>Kiralar</div>
+                  </button>
+
+                  <button
+                    onClick={() => setActiveSection('assets')}
+                    className={`tabbar-item ${activeSection === 'assets' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
+                  >
+                    <div className={`text-xl ${activeSection === 'assets' ? 'text-sky-600' : 'text-slate-500'}`}>🧰</div>
+                    <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'assets' ? 'text-sky-700' : 'text-slate-500'}`}>Stok</div>
                   </button>
                 </div>
-              ))}
-
-              {filteredAssets.length === 0 && (
-                <div className="text-center py-44 card-glass rounded-[4rem] border-2 border-dashed border-slate-200/70">
-                  <div className="text-8xl mb-8 opacity-60 float-slow">🧰</div>
-                  <h3 className="text-3xl font-black text-slate-700 tracking-tighter">STOK YOK</h3>
-                  <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
-                    İlk stok kaydını ekleyin.
-                  </p>
-                </div>
-              )}
+              </div>
             </div>
-          </div>
-        )}
-      </main>
-
-      {/* Mobile Tab Bar (no sidebar) */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-50 px-4 pb-4">
-        <div className="tabbar rounded-[2.25rem] px-4 py-3">
-          <div className="grid grid-cols-5 items-center">
-            <button
-              onClick={() => setActiveSection('home')}
-              className={`tabbar-item ${activeSection === 'home' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
-            >
-              <div className={`text-xl ${activeSection === 'home' ? 'text-indigo-600' : 'text-slate-500'}`}>✨</div>
-              <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'home' ? 'text-indigo-700' : 'text-slate-500'}`}>Anasayfa</div>
-            </button>
-
-            <button
-              onClick={() => {
-                setActiveSection('tasks');
-                setActiveCategoryId(null); // "Tüm Görevler" görünümü
-              }}
-              className={`tabbar-item ${activeSection === 'tasks' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
-            >
-              <div className={`text-xl ${activeSection === 'tasks' ? 'text-indigo-600' : 'text-slate-500'}`}>📝</div>
-              <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'tasks' ? 'text-indigo-700' : 'text-slate-500'}`}>Görevler</div>
-            </button>
-
-            {/* Context FAB */}
-            <div className="relative flex items-center justify-center">
-              <button
-                onClick={() => {
-                  if (activeSection === 'rentals') {
-                    setIsRentalModalOpen(true);
-                    return;
-                  }
-                  if (activeSection === 'assets') {
-                    setIsAssetModalOpen(true);
-                    return;
-                  }
-                  if (activeSection === 'tasks') {
-                    openCreateTaskModal(activeCategoryId);
-                    return;
-                  }
-                  // home
-                  if (!activeCategoryId && categories.length) {
-                    setActiveSection('tasks');
-                    setActiveCategoryId(categories[0].id);
-                    openCreateTaskModal(categories[0].id);
-                    return;
-                  }
-                  if (!categories.length) {
-                    setIsCategoryModalOpen(true);
-                    return;
-                  }
-                  setActiveSection('tasks');
-                  openCreateTaskModal(activeCategoryId || categories[0]?.id || null);
-                }}
-                className="relative fab fab-pulse w-14 h-14 rounded-full flex items-center justify-center text-white font-black text-2xl -mt-8 shadow-xl"
-                aria-label="Add"
-                title="Ekle"
-              >
-                +
-              </button>
-            </div>
-
-            <button
-              onClick={() => setActiveSection('rentals')}
-              className={`tabbar-item ${activeSection === 'rentals' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
-            >
-              <div className={`text-xl ${activeSection === 'rentals' ? 'text-emerald-600' : 'text-slate-500'}`}>🏠</div>
-              <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'rentals' ? 'text-emerald-700' : 'text-slate-500'}`}>Kiralar</div>
-            </button>
-
-            <button
-              onClick={() => setActiveSection('assets')}
-              className={`tabbar-item ${activeSection === 'assets' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
-            >
-              <div className={`text-xl ${activeSection === 'assets' ? 'text-sky-600' : 'text-slate-500'}`}>🧰</div>
-              <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'assets' ? 'text-sky-700' : 'text-slate-500'}`}>Stok</div>
-            </button>
-          </div>
-        </div>
-      </div>
           </div>
         </div>
       </div>
@@ -2490,23 +2531,23 @@ const App: React.FC = () => {
             <div className="space-y-10">
               <div>
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Kategori Adı</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   autoFocus
-                  value={newCategoryName} 
-                  onChange={(e) => setNewCategoryName(e.target.value)} 
-                  placeholder="Örn: Mutfak İşleri" 
-                  className="w-full p-6 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-2xl transition-all shadow-inner" 
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  placeholder="Örn: Mutfak İşleri"
+                  className="w-full p-6 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-2xl transition-all shadow-inner"
                 />
               </div>
-              
+
               <div>
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">İkon</label>
                 <div className="grid grid-cols-5 gap-4">
                   {CATEGORY_ICONS.map(i => (
-                    <button 
-                      key={i} 
-                      onClick={() => setNewCategoryIcon(i)} 
+                    <button
+                      key={i}
+                      onClick={() => setNewCategoryIcon(i)}
                       className={`text-4xl p-4 rounded-3xl border-2 transition-all duration-300 ${newCategoryIcon === i ? 'border-indigo-500 bg-indigo-50 scale-110 shadow-xl shadow-indigo-100' : 'border-slate-50 hover:bg-slate-50'}`}
                     >
                       {i}
@@ -2519,9 +2560,9 @@ const App: React.FC = () => {
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Renk</label>
                 <div className="grid grid-cols-4 gap-4">
                   {CATEGORY_COLORS.map(color => (
-                    <button 
-                      key={color} 
-                      onClick={() => setNewCategoryColor(color)} 
+                    <button
+                      key={color}
+                      onClick={() => setNewCategoryColor(color)}
                       className={`h-12 rounded-2xl transition-all duration-300 ${color} ${newCategoryColor === color ? 'ring-8 ring-offset-4 ring-indigo-500/20 scale-105' : 'hover:scale-105'}`}
                     />
                   ))}
@@ -2708,9 +2749,8 @@ const App: React.FC = () => {
                           setSelectedTaskCategoryId(cat.id);
                           setActiveCategoryId(cat.id);
                         }}
-                        className={`relative overflow-hidden aspect-square rounded-3xl border transition-all tap-scale hover-glow ${
-                          isSelected ? 'active-pill border-indigo-200' : 'bg-white/70 border-slate-200/70'
-                        }`}
+                        className={`relative overflow-hidden aspect-square rounded-3xl border transition-all tap-scale hover-glow ${isSelected ? 'active-pill border-indigo-200' : 'bg-white/70 border-slate-200/70'
+                          }`}
                         title={cat.name}
                       >
                         <div className={`absolute inset-0 ${cat.color} opacity-10`} />
@@ -2751,14 +2791,14 @@ const App: React.FC = () => {
 
               <div>
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Görev Nedir?</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   autoFocus
-                  value={newTaskTitle} 
-                  onChange={(e) => setNewTaskTitle(e.target.value)} 
-                  placeholder="Yapılacak işi yazın..." 
-                  className="w-full p-8 bg-slate-50 border border-slate-100 rounded-[2.5rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-black text-3xl transition-all shadow-inner" 
-                  onKeyDown={e => e.key === 'Enter' && handleAddTask()} 
+                  value={newTaskTitle}
+                  onChange={(e) => setNewTaskTitle(e.target.value)}
+                  placeholder="Yapılacak işi yazın..."
+                  className="w-full p-8 bg-slate-50 border border-slate-100 rounded-[2.5rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-black text-3xl transition-all shadow-inner"
+                  onKeyDown={e => e.key === 'Enter' && handleAddTask()}
                 />
               </div>
 
@@ -2874,10 +2914,14 @@ const App: React.FC = () => {
                   </div>
                 </div>
               )}
-              
+
               <div className="flex gap-6 pt-6">
                 <button
-                  onClick={() => { setIsTaskModalOpen(false); setAiSuggestions([]); setEditingTaskId(null); }}
+                  onClick={() => {
+                    setIsTaskModalOpen(false);
+                    setEditingTaskId(null);
+                    resetTaskModalState();
+                  }}
                   className="flex-1 py-6 font-black text-slate-400 hover:text-slate-600 uppercase text-[10px] tracking-widest"
                 >
                   Vazgeç
@@ -3005,7 +3049,7 @@ const App: React.FC = () => {
             <div className="flex items-center gap-4 mb-10">
               <div className={`w-16 h-16 rounded-[2rem] flex items-center justify-center ${whatsAppReady ? 'bg-emerald-100' : 'bg-slate-100'}`}>
                 <svg className={`w-10 h-10 ${whatsAppReady ? 'text-emerald-600' : 'text-slate-400'}`} fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/>
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
                 </svg>
               </div>
               <div className="flex-1">
@@ -3023,15 +3067,15 @@ const App: React.FC = () => {
                   Bildirim Gönderilecek Numaralar
                 </label>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={phoneNumber}
                     onChange={(e) => setPhoneNumber(e.target.value)}
                     placeholder="Ana numara"
                     className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-xl transition-all shadow-inner"
                   />
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={secondPhoneNumber}
                     onChange={(e) => setSecondPhoneNumber(e.target.value)}
                     placeholder="2. numara (opsiyonel)"
@@ -3070,15 +3114,15 @@ const App: React.FC = () => {
                       📲 QR Kodu WhatsApp ile Tarayın
                     </p>
                     <div className="flex justify-center mb-6">
-                      <img 
-                        src={qrCode} 
-                        alt="QR Code" 
+                      <img
+                        src={qrCode}
+                        alt="QR Code"
                         className="w-64 h-64 border-8 border-slate-100 rounded-[3rem] shadow-2xl"
                       />
                     </div>
                     <p className="text-slate-500 text-sm mb-6">
-                      1. WhatsApp'ı açın<br/>
-                      2. Menü &gt; Bağlı Cihazlar &gt; Cihaz Bağla<br/>
+                      1. WhatsApp'ı açın<br />
+                      2. Menü &gt; Bağlı Cihazlar &gt; Cihaz Bağla<br />
                       3. Bu QR kodu telefonunuzla tarayın
                     </p>
                     <button
@@ -3387,6 +3431,45 @@ const App: React.FC = () => {
               >
                 Fotoğrafı Kaydet ve Tamamla
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success Notification Popup */}
+      {successNotification.show && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 pointer-events-none">
+          <div className="pointer-events-auto animate-bounce-in">
+            <div className="relative overflow-hidden bg-white rounded-[2.5rem] shadow-2xl border-2 border-emerald-200 max-w-md w-full">
+              {/* Animated background gradient */}
+              <div className="absolute inset-0 bg-gradient-to-br from-emerald-50 via-white to-emerald-50 opacity-80" />
+
+              {/* Success icon with pulse animation */}
+              <div className="relative p-8 flex flex-col items-center text-center">
+                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center mb-6 shadow-lg shadow-emerald-200 animate-pulse-slow">
+                  <span className="text-4xl">{successNotification.icon}</span>
+                </div>
+
+                <h3 className="text-2xl font-black text-slate-800 mb-3 tracking-tight">
+                  Başarılı!
+                </h3>
+
+                <p className="text-slate-600 font-bold whitespace-pre-line leading-relaxed">
+                  {successNotification.message}
+                </p>
+
+                {/* Close button */}
+                <button
+                  onClick={() => setSuccessNotification({ show: false, message: '', icon: '' })}
+                  className="mt-8 px-8 py-4 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-[1.5rem] font-black shadow-lg hover:shadow-xl hover:from-emerald-600 hover:to-emerald-700 active:scale-95 transition-all uppercase text-xs tracking-widest"
+                >
+                  Tamam
+                </button>
+              </div>
+
+              {/* Decorative elements */}
+              <div className="absolute top-4 right-4 w-16 h-16 rounded-full bg-emerald-200/30 blur-2xl" />
+              <div className="absolute bottom-4 left-4 w-20 h-20 rounded-full bg-emerald-300/20 blur-3xl" />
             </div>
           </div>
         </div>

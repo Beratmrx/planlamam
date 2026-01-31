@@ -194,6 +194,20 @@
         /* Subtle float */
         .float-slow { animation: floaty 6s ease-in-out infinite; }
         @keyframes floaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+
+        /* Success notification animations */
+        .animate-bounce-in { animation: bounceIn 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55) both; }
+        @keyframes bounceIn {
+            0% { transform: scale(0.3); opacity: 0; }
+            50% { transform: scale(1.05); }
+            70% { transform: scale(0.9); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .animate-pulse-slow { animation: pulseSlow 2s ease-in-out infinite; }
+        @keyframes pulseSlow {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.9; }
+        }
     </style>
 <script type="importmap">
 {

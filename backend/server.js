@@ -57,7 +57,7 @@ const patchSendSeen = async () => {
   try {
     await whatsappClient.pupPage.evaluate(() => {
       if (window.WWebJS && typeof window.WWebJS.sendSeen === 'function') {
-        window.WWebJS.sendSeen = async () => {};
+        window.WWebJS.sendSeen = async () => { };
       }
     });
     return true;
@@ -122,7 +122,7 @@ const initializeWhatsApp = () => {
   if (isWhatsAppStarting) return;
   isWhatsAppStarting = true;
   console.log('🚀 WhatsApp Client başlatılıyor...');
-  
+
   whatsappClient = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: {
@@ -135,16 +135,24 @@ const initializeWhatsApp = () => {
         '--disable-accelerated-2d-canvas',
         '--no-first-run',
         '--no-zygote',
-        '--disable-gpu'
+        '--single-process',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--disable-extensions',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-sync',
+        '--metrics-recording-only',
+        '--mute-audio',
+        '--no-default-browser-check',
+        '--disable-features=TranslateUI',
+        '--disable-ipc-flooding-protection'
       ]
     }
   });
 
   whatsappClient.on('loading_screen', (percent, message) => {
     console.log('📱 LOADING:', percent, message);
-    // #region agent log
-    if(percent === 100) { fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:107',message:'loading_screen 100%',data:{percent:percent,loading_message:message,isWhatsAppReady:isWhatsAppReady},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{}); }
-    // #endregion
   });
 
   whatsappClient.on('qr', async (qr) => {
@@ -153,16 +161,16 @@ const initializeWhatsApp = () => {
     console.log('✅ QR KOD ALINDI! Telefonunuzla aşağıdaki QR kodu okutun:');
     console.log('='.repeat(60));
     console.log('\n');
-    
+
     // QR kodu terminalde göster
     qrTerminal.generate(qr, { small: true });
-    
+
     console.log('\n');
     console.log('='.repeat(60));
     console.log('Veya tarayıcıdaki modal\'da göreceksiniz');
     console.log('='.repeat(60));
     console.log('\n');
-    
+
     try {
       qrCodeData = await qrcode.toDataURL(qr);
       isWhatsAppReady = false;
@@ -173,16 +181,10 @@ const initializeWhatsApp = () => {
   });
 
   whatsappClient.on('ready', () => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:135',message:'ready event triggered',data:{isWhatsAppReady_before:isWhatsAppReady,qrCodeData_exists:qrCodeData!==null},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,B'})}).catch(()=>{});
-    // #endregion
     console.log('✅ WhatsApp bağlantısı hazır!');
     isWhatsAppReady = true;
     qrCodeData = null;
     isWhatsAppStarting = false;
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:139',message:'ready event completed',data:{isWhatsAppReady_after:isWhatsAppReady,qrCodeData_after:qrCodeData},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,B'})}).catch(()=>{});
-    // #endregion
     patchSendSeen().then((patched) => {
       isSendSeenPatched = patched;
       console.log(patched ? '🛡️ sendSeen patch uygulandı' : '⚠️ sendSeen patch uygulanamadı');
@@ -190,26 +192,16 @@ const initializeWhatsApp = () => {
   });
 
   whatsappClient.on('authenticated', async () => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:155',message:'authenticated event triggered',data:{isWhatsAppReady:isWhatsAppReady,hasClient:whatsappClient!==null,timestamp_ms:Date.now()},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C,D'})}).catch(()=>{});
-    // #endregion
     console.log('✅ WhatsApp kimlik doğrulandı!');
-    
+
     // Client state'ini kontrol et
     try {
       const info = await whatsappClient.info;
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:162',message:'client.info after authenticated',data:{wid:info?.wid,platform:info?.platform,phone:info?.phone},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{});
-      // #endregion
       console.log('📱 Client Info:', { wid: info?.wid, platform: info?.platform });
     } catch (err) {
-      // #region agent log
-      fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:167',message:'client.info error',data:{error:err.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{});
-      // #endregion
       console.log('⚠️ Client info alınamadı:', err.message);
     }
-    
-    // #region agent log
+
     // Periyodik state kontrolü: Her 5 saniyede bir client state'ini kontrol et
     let consecutiveHasInfoCount = 0;
     const stateCheckInterval = setInterval(async () => {
@@ -220,19 +212,12 @@ const initializeWhatsApp = () => {
       try {
         const info = await whatsappClient.info;
         const hasInfo = !!info && info.wid;
-        const state = hasInfo ? 'has_info' : 'no_info';
-        
+
         if (hasInfo) {
           consecutiveHasInfoCount++;
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:177',message:'periodic state check - hasInfo',data:{state:state,hasInfo:hasInfo,consecutiveCount:consecutiveHasInfoCount,isWhatsAppReady:isWhatsAppReady},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{});
-          // #endregion
-          
+
           // Eğer 3 kere üst üste hasInfo true ise ve ready event gelmediyse, manuel olarak ready yap
           if (consecutiveHasInfoCount >= 3 && !isWhatsAppReady) {
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:185',message:'MANUAL READY: hasInfo true 3 times, setting ready manually',data:{consecutiveCount:consecutiveHasInfoCount},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{});
-            // #endregion
             console.log('✅ WhatsApp bağlantısı hazır! (Manuel - ready event gelmedi ama client hazır)');
             isWhatsAppReady = true;
             qrCodeData = null;
@@ -245,42 +230,28 @@ const initializeWhatsApp = () => {
           }
         } else {
           consecutiveHasInfoCount = 0;
-          // #region agent log
-          fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:200',message:'periodic state check - noInfo',data:{state:state,hasInfo:hasInfo,isWhatsAppReady:isWhatsAppReady},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{});
-          // #endregion
         }
       } catch (err) {
         consecutiveHasInfoCount = 0;
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:207',message:'periodic state check error',data:{error:err.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{});
-        // #endregion
       }
     }, 5000);
-    
+
     // Timeout ekle: 30 saniye sonra ready gelmezse log
     setTimeout(() => {
       clearInterval(stateCheckInterval);
       if (!isWhatsAppReady) {
-        fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:186',message:'TIMEOUT: ready event not received after authenticated',data:{isWhatsAppReady:isWhatsAppReady,seconds_elapsed:30},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{});
         console.log('⚠️ UYARI: authenticated\'dan 30 saniye sonra ready event gelmedi!');
       }
     }, 30000);
-    // #endregion
   });
 
   whatsappClient.on('auth_failure', (msg) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:150',message:'auth_failure event',data:{failure_message:msg},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C,D'})}).catch(()=>{});
-    // #endregion
     console.error('❌ Kimlik doğrulama hatası:', msg);
     isWhatsAppReady = false;
     isWhatsAppStarting = false;
   });
 
   whatsappClient.on('disconnected', (reason) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:156',message:'disconnected event triggered',data:{reason:reason,isWhatsAppReady_before:isWhatsAppReady},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C,D'})}).catch(()=>{});
-    // #endregion
     console.log('❌ WhatsApp bağlantısı kesildi:', reason);
     isWhatsAppReady = false;
     qrCodeData = null;
@@ -289,33 +260,18 @@ const initializeWhatsApp = () => {
 
   // Hata yakalama
   whatsappClient.on('remote_session_saved', () => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:182',message:'remote_session_saved event',data:{isWhatsAppReady:isWhatsAppReady},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
     console.log('💾 Remote session saved');
   });
 
   // State change tracking
   whatsappClient.on('change_state', (state) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:188',message:'change_state event',data:{state:state,isWhatsAppReady:isWhatsAppReady},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,D'})}).catch(()=>{});
-    // #endregion
     console.log('🔄 WhatsApp state değişti:', state);
   });
 
   // WhatsApp'ı başlat ve hataları yakala
-  // #region agent log
-  fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:207',message:'initialize() called',data:{isWhatsAppStarting:isWhatsAppStarting,hasClient:whatsappClient!==null},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,E'})}).catch(()=>{});
-  // #endregion
   whatsappClient.initialize().then(() => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:211',message:'initialize() promise resolved',data:{isWhatsAppReady:isWhatsAppReady},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,E'})}).catch(()=>{});
-    // #endregion
     console.log('✅ initialize() promise resolved');
   }).catch(err => {
-    // #region agent log
-    fetch('http://127.0.0.1:7242/ingest/adf2bae0-5a99-47b1-915c-b0e20d396b05',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'server.js:171',message:'initialize() error',data:{error_message:err.message,error_stack:err.stack},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A,E'})}).catch(()=>{});
-    // #endregion
     console.error('❌ WhatsApp başlatma hatası:', err.message);
     whatsappClient = null;
     isWhatsAppReady = false;
@@ -359,17 +315,17 @@ app.get('/api/whatsapp/status', (req, res) => {
 
 app.post('/api/whatsapp/initialize', (req, res) => {
   if (whatsappClient) {
-    return res.json({ 
-      success: false, 
+    return res.json({
+      success: false,
       message: 'WhatsApp zaten başlatılmış',
-      ready: isWhatsAppReady 
+      ready: isWhatsAppReady
     });
   }
-  
+
   initializeWhatsApp();
-  res.json({ 
-    success: true, 
-    message: 'WhatsApp başlatılıyor...' 
+  res.json({
+    success: true,
+    message: 'WhatsApp başlatılıyor...'
   });
 });
 
@@ -387,7 +343,7 @@ app.post('/api/whatsapp/restart', async (req, res) => {
 app.post('/api/whatsapp/logout', async (req, res) => {
   try {
     console.log('🔓 WhatsApp oturumu sonlandırılıyor...');
-    
+
     // 1. WhatsApp client'ı tamamen durdur
     const client = whatsappClient;
     whatsappClient = null;
@@ -395,42 +351,42 @@ app.post('/api/whatsapp/logout', async (req, res) => {
     isSendSeenPatched = false;
     qrCodeData = null;
     isWhatsAppStarting = false;
-    
+
     if (client) {
       console.log('📴 WhatsApp client kapatılıyor...');
       await client.destroy();
       console.log('✅ WhatsApp client kapatıldı');
     }
-    
+
     // 2. Browser'ın tamamen kapanması için bekle
     await new Promise(resolve => setTimeout(resolve, 2000));
-    
+
     // 3. .wwebjs_auth klasörünü sil
     const authPath = './.wwebjs_auth';
     if (fs.existsSync(authPath)) {
       fs.rmSync(authPath, { recursive: true, force: true });
       console.log('✅ WhatsApp oturum dosyaları silindi');
     }
-    
+
     // 4. .wwebjs_cache klasörünü de sil (varsa)
     const cachePath = './.wwebjs_cache';
     if (fs.existsSync(cachePath)) {
       fs.rmSync(cachePath, { recursive: true, force: true });
       console.log('✅ WhatsApp cache silindi');
     }
-    
+
     console.log('✅ WhatsApp oturumu tamamen sonlandırıldı!');
     console.log('💡 Tekrar bağlanmak için /api/whatsapp/initialize endpoint\'ini çağırın');
-    
-    res.json({ 
-      success: true, 
-      message: 'WhatsApp oturumu tamamen sonlandırıldı. Tekrar bağlanmak için QR kod gerekecek.' 
+
+    res.json({
+      success: true,
+      message: 'WhatsApp oturumu tamamen sonlandırıldı. Tekrar bağlanmak için QR kod gerekecek.'
     });
   } catch (error) {
     console.error('❌ Logout hatası:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Oturum sonlandırılamadı: ' + error.message 
+    res.status(500).json({
+      success: false,
+      message: 'Oturum sonlandırılamadı: ' + error.message
     });
   }
 });
@@ -447,9 +403,9 @@ app.post('/api/whatsapp/send', async (req, res) => {
 
   if (!isWhatsAppReady || !whatsappClient) {
     console.log('❌ WhatsApp hazır değil!');
-    return res.status(400).json({ 
-      success: false, 
-      message: 'WhatsApp hazır değil' 
+    return res.status(400).json({
+      success: false,
+      message: 'WhatsApp hazır değil'
     });
   }
 
@@ -459,45 +415,45 @@ app.post('/api/whatsapp/send', async (req, res) => {
     }
     // Türkiye telefon numarası formatı: 90 ile başlamalı
     let formattedNumber = phoneNumber.replace(/\D/g, '');
-    
+
     // 0 ile başlıyorsa kaldır
     if (formattedNumber.startsWith('0')) {
       formattedNumber = formattedNumber.substring(1);
     }
-    
+
     // 90 ile başlamıyorsa ekle
     if (!formattedNumber.startsWith('90')) {
       formattedNumber = '90' + formattedNumber;
     }
 
     const chatId = formattedNumber + '@c.us';
-    
+
     console.log('📞 Formatlanmış numara:', formattedNumber);
     console.log('📨 Chat ID:', chatId);
     console.log('💬 Mesaj gönderiliyor...');
-    
+
     // Numarayı doğrula
     const numberId = await whatsappClient.getNumberId(formattedNumber);
     console.log('🔍 Numara ID:', numberId);
-    
+
     if (!numberId) {
       throw new Error('Bu numara WhatsApp\'ta kayıtlı değil!');
     }
-    
+
     // Mesaj gönder (sendSeen patch ve sendSeen: false ile)
     await whatsappClient.sendMessage(chatId, message, { sendSeen: false });
-    
+
     console.log('✅ Mesaj başarıyla gönderildi!');
-    
-    res.json({ 
-      success: true, 
-      message: 'Mesaj gönderildi!' 
+
+    res.json({
+      success: true,
+      message: 'Mesaj gönderildi!'
     });
   } catch (error) {
     console.error('❌ Mesaj gönderme hatası:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Mesaj gönderilemedi: ' + error.message 
+    res.status(500).json({
+      success: false,
+      message: 'Mesaj gönderilemedi: ' + error.message
     });
   }
 });

@@ -1,8 +1,9 @@
 FROM node:22-slim
 
-# Chromium'un çalışması için gerekli runtime kütüphaneleri yükle
-# (Puppeteer kendi Chromium'unu indirecek, bu yüzden sadece runtime deps gerekli)
+# Chromium ve gerekli bağımlılıkları yükle
 RUN apt-get update && apt-get install -y \
+  chromium \
+  chromium-sandbox \
   fonts-liberation \
   libappindicator3-1 \
   libasound2 \
@@ -21,17 +22,14 @@ RUN apt-get update && apt-get install -y \
   libxfixes3 \
   libxrandr2 \
   xdg-utils \
+  ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Package dosyalarını kopyala ve bağımlılıkları yükle
-# Önce tüm bağımlılıkları yükle (Puppeteer Chromium'u indirmek için)
 COPY package*.json ./
 RUN npm install --no-audit --no-fund
-
-# Production bağımlılıklarını temizle (devDependencies hariç)
-RUN npm prune --production
 
 # Uygulama dosyalarını kopyala
 COPY . .

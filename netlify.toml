@@ -3,10 +3,10 @@
   publish = "dist"
 
 # API isteklerini VDS backend'e proxy et (mixed content / CORS önlemek için)
-# VDS IP'yi kendi sunucunuzla değiştirin (örn. 31.58.250.86)
+# Backend domain: api.nexayazilim.com
 [[redirects]]
   from = "/api/*"
-  to = "http://31.58.250.86:3002/api/:splat"
+  to = "https://api.nexayazilim.com/api/:splat"
   status = 200
   force = true
 

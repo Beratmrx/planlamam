@@ -217,7 +217,7 @@ const App: React.FC = () => {
     };
   };
 
-  const applyHydratedState = (data: any) => {
+  const applyHydratedState = (data: any, isBackgroundSync = false) => {
     const normalizedUsers = normalizeUsers(Array.isArray(data?.users) ? data.users : []);
     // ✅ Session: oturum açıkken yenilemede login isteme
     const currentUserId = resolveCurrentUserId(normalizedUsers, getSessionUserId());
@@ -232,7 +232,9 @@ const App: React.FC = () => {
 
     setUsers(normalizedUsers);
     setCurrentUserId(currentUserId);
-    setNewTaskAssigneeId(currentUserId || '');
+    if (!isBackgroundSync) {
+      setNewTaskAssigneeId(currentUserId || '');
+    }
     setIsAuthModalOpen(!currentUserId);
     setCategories(categories);
     setActiveCategoryId(activeCategoryId);
@@ -243,10 +245,14 @@ const App: React.FC = () => {
     setAuditOptions(Array.isArray(data?.auditOptions) ? data.auditOptions : []);
     setRentals(Array.isArray(data?.rentals) ? data.rentals : []);
     setAssets(Array.isArray(data?.assets) ? data.assets : []);
-    const resolvedSection = ['home', 'tasks', 'rentals', 'assets'].includes(localActiveSection || data?.activeSection)
-      ? (localActiveSection || data?.activeSection)
-      : 'home';
-    setActiveSection(resolvedSection);
+
+    // FIX: Don't reset active section during background sync to avoid interrupting user
+    if (!isBackgroundSync) {
+      const resolvedSection = ['home', 'tasks', 'rentals', 'assets'].includes(localActiveSection || data?.activeSection)
+        ? (localActiveSection || data?.activeSection)
+        : 'home';
+      setActiveSection(resolvedSection);
+    }
   };
 
   useEffect(() => {
@@ -318,7 +324,7 @@ const App: React.FC = () => {
         const data = await response.json();
         if (data?.savedAt && data.savedAt > lastStorageSyncRef.current) {
           lastStorageSyncRef.current = data.savedAt;
-          applyHydratedState(data);
+          applyHydratedState(data, true); // true = isBackgroundSync
         }
       } catch (error) {
         console.error('Storage senkron hatası:', error);
@@ -1036,9 +1042,9 @@ const App: React.FC = () => {
     // Only set selectedTaskCategoryId if it's not already set
     if (!selectedTaskCategoryId) setSelectedTaskCategoryId(fallback);
     // Ensure assignee is set when modal opens
-    if (currentUserId && !editingTaskId && !newTaskAssigneeId) {
-      setNewTaskAssigneeId(currentUserId);
-    }
+    // FIX: Removed automatic overwriting of assignee here. 
+    // Initialization is handled in openCreateTaskModal.
+
   }, [isTaskModalOpen, selectedTaskCategoryId, activeCategoryId, categories, currentUserId, editingTaskId]);
 
   const handleWhatsAppInitialize = async () => {
@@ -1848,8 +1854,8 @@ const App: React.FC = () => {
                                   const cat = categories.find(c => c.id === task.categoryId);
                                   return (
                                     <div key={task.id} className={`p-4 rounded-2xl border transition-all ${task.isCompleted ? 'bg-emerald-50/50 border-emerald-100 opacity-80' :
-                                        task.isExpired ? 'bg-rose-50/50 border-rose-100' :
-                                          'bg-white/60 border-slate-100'
+                                      task.isExpired ? 'bg-rose-50/50 border-rose-100' :
+                                        'bg-white/60 border-slate-100'
                                       }`}>
                                       <div className="flex items-start justify-between gap-3">
                                         <div className="min-w-0">

@@ -1,9 +1,11 @@
 // NOT: .env sadece server.js'ten yüklenir (backend/.env). Burada dotenv/config kullanılmaz;
 // aksi halde CWD'deki .env token'ı ezebilir ve 190 hatasına yol açar.
 import axios from 'axios';
+import https from 'https';
+import dns from 'dns';
 
-// VDS/container'da getaddrinfo EAI_AGAIN veriyor; dns.resolve4 bile konteyner içinde getaddrinfo'ya düşebiliyor.
-// Bu yüzden hostname çözümlemesi YAPMIYORUZ: doğrudan bilinen IP kullanıyoruz (Host: graph.facebook.com ile).
+// VDS/container'da getaddrinfo EAI_AGAIN veriyor; redirect takibi de graph.facebook.com çözümleyince aynı hata.
+// graph.facebook.com için DNS'e hiç gitmeyen agent kullanıyoruz (lookup override).
 const META_API_HOST = 'graph.facebook.com';
 const WHATSAPP_API_VERSION = process.env.WHATSAPP_API_VERSION || 'v18.0';
 const WHATSAPP_API_TIMEOUT_MS = Number(process.env.WHATSAPP_API_TIMEOUT_MS) || 30000;
@@ -11,6 +13,16 @@ const WHATSAPP_API_TIMEOUT_MS = Number(process.env.WHATSAPP_API_TIMEOUT_MS) || 3
 // graph.facebook.com bilinen IP (Meta CDN). Değişirse .env'de META_GRAPH_IP tanımlayın.
 const META_GRAPH_IP = (process.env.META_GRAPH_IP || '157.240.196.17').trim();
 const META_API_BASE_URL = `https://${META_GRAPH_IP}/${WHATSAPP_API_VERSION}`;
+
+/** VDS'te EAI_AGAIN önlemek: graph.facebook.com her zaman META_GRAPH_IP'ye çözümlenir, DNS çağrılmaz. */
+const metaHttpsAgent = new https.Agent({
+    lookup: (hostname, options, callback) => {
+        if (hostname === META_API_HOST) {
+            return callback(null, META_GRAPH_IP, 4);
+        }
+        dns.lookup(hostname, options, callback);
+    }
+});
 
 /** Meta API istekleri için ortak header'lar (Host: graph.facebook.com TLS SNI için zorunlu). */
 function metaHeaders(accessToken) {
@@ -52,7 +64,8 @@ class WhatsAppCloudAPI {
             console.log('🔍 WhatsApp status isteği:', url, '| token:', tokenPreview);
             const response = await axios.get(url, {
                 headers: metaHeaders(this.accessToken),
-                timeout: WHATSAPP_API_TIMEOUT_MS
+                timeout: WHATSAPP_API_TIMEOUT_MS,
+                httpsAgent: metaHttpsAgent
             });
 
             return {
@@ -142,7 +155,8 @@ class WhatsAppCloudAPI {
                 },
                 {
                     headers: metaHeaders(this.accessToken),
-                    timeout: WHATSAPP_API_TIMEOUT_MS
+                    timeout: WHATSAPP_API_TIMEOUT_MS,
+                    httpsAgent: metaHttpsAgent
                 }
             );
 
@@ -201,7 +215,8 @@ class WhatsAppCloudAPI {
                 },
                 {
                     headers: metaHeaders(this.accessToken),
-                    timeout: WHATSAPP_API_TIMEOUT_MS
+                    timeout: WHATSAPP_API_TIMEOUT_MS,
+                    httpsAgent: metaHttpsAgent
                 }
             );
 

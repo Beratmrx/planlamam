@@ -4,6 +4,7 @@ import axios from 'axios';
 
 const WHATSAPP_API_VERSION = process.env.WHATSAPP_API_VERSION || 'v18.0';
 const WHATSAPP_API_BASE_URL = `https://graph.facebook.com/${WHATSAPP_API_VERSION}`;
+const WHATSAPP_API_TIMEOUT_MS = Number(process.env.WHATSAPP_API_TIMEOUT_MS) || 30000;
 
 class WhatsAppCloudAPI {
     constructor() {
@@ -41,7 +42,7 @@ class WhatsAppCloudAPI {
                     'Authorization': `Bearer ${this.accessToken}`,
                     'Content-Type': 'application/json'
                 },
-                timeout: 15000
+                timeout: 30000
             });
 
             return {
@@ -71,6 +72,8 @@ class WhatsAppCloudAPI {
                 userMessage = 'Access token süresi dolmuş veya geçersiz. Meta Developer Console\'dan yeni kalıcı token oluşturun.';
             } else if (errCode === 100) {
                 userMessage = 'Phone Number ID hatalı veya bu uygulamaya ait değil. Meta API Setup\'tan doğru ID alın.';
+            } else if (error.code === 'ECONNABORTED' || (error.message && error.message.includes('timeout'))) {
+                userMessage = 'Meta API yanıt vermedi (zaman aşımı). VDS firewall veya outbound HTTPS (graph.facebook.com) açık mı kontrol edin.';
             } else if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
                 userMessage = 'Meta API\'ye bağlanılamadı (ağ hatası).';
             }
@@ -129,7 +132,8 @@ class WhatsAppCloudAPI {
                     headers: {
                         'Authorization': `Bearer ${this.accessToken}`,
                         'Content-Type': 'application/json'
-                    }
+                    },
+                    timeout: WHATSAPP_API_TIMEOUT_MS
                 }
             );
 
@@ -190,7 +194,8 @@ class WhatsAppCloudAPI {
                     headers: {
                         'Authorization': `Bearer ${this.accessToken}`,
                         'Content-Type': 'application/json'
-                    }
+                    },
+                    timeout: WHATSAPP_API_TIMEOUT_MS
                 }
             );
 

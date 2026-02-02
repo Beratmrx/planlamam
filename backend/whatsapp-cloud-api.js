@@ -1,6 +1,23 @@
 // NOT: .env sadece server.js'ten yüklenir (backend/.env). Burada dotenv/config kullanılmaz;
 // aksi halde CWD'deki .env token'ı ezebilir ve 190 hatasına yol açar.
 import axios from 'axios';
+import https from 'https';
+import dns from 'dns';
+
+// VDS/container'da sistem DNS (getaddrinfo) bazen EAI_AGAIN veriyor; Node'un DNS'ini Google DNS ile zorla.
+dns.setServers(['8.8.8.8', '8.8.4.4']);
+
+/** Meta API istekleri için: hostname'i getaddrinfo yerine dns.resolve4 ile çöz (EAI_AGAIN bypass). */
+function metaLookup(hostname, options, callback) {
+    dns.resolve4(hostname, (err, addresses) => {
+        if (err) return callback(err);
+        if (!addresses?.length) return callback(new Error('No address for ' + hostname));
+        const ip = typeof addresses[0] === 'string' ? addresses[0] : addresses[0].address;
+        callback(null, ip, 4);
+    });
+}
+
+const metaHttpsAgent = new https.Agent({ lookup: metaLookup });
 
 const WHATSAPP_API_VERSION = process.env.WHATSAPP_API_VERSION || 'v18.0';
 const WHATSAPP_API_BASE_URL = `https://graph.facebook.com/${WHATSAPP_API_VERSION}`;
@@ -42,7 +59,8 @@ class WhatsAppCloudAPI {
                     'Authorization': `Bearer ${this.accessToken}`,
                     'Content-Type': 'application/json'
                 },
-                timeout: 30000
+                timeout: WHATSAPP_API_TIMEOUT_MS,
+                httpsAgent: metaHttpsAgent
             });
 
             return {
@@ -76,6 +94,8 @@ class WhatsAppCloudAPI {
                 userMessage = 'Meta API yanıt vermedi (zaman aşımı). VDS firewall veya outbound HTTPS (graph.facebook.com) açık mı kontrol edin.';
             } else if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
                 userMessage = 'Meta API\'ye bağlanılamadı (ağ hatası).';
+            } else if (error.code === 'EAI_AGAIN' || (error.message && error.message.includes('getaddrinfo EAI_AGAIN'))) {
+                userMessage = 'DNS çözümleme hatası (EAI_AGAIN). VDS\'te 8.8.8.8 (UDP 53) ve 443 outbound açık mı kontrol edin.';
             }
 
             return {
@@ -133,7 +153,8 @@ class WhatsAppCloudAPI {
                         'Authorization': `Bearer ${this.accessToken}`,
                         'Content-Type': 'application/json'
                     },
-                    timeout: WHATSAPP_API_TIMEOUT_MS
+                    timeout: WHATSAPP_API_TIMEOUT_MS,
+                    httpsAgent: metaHttpsAgent
                 }
             );
 
@@ -195,7 +216,8 @@ class WhatsAppCloudAPI {
                         'Authorization': `Bearer ${this.accessToken}`,
                         'Content-Type': 'application/json'
                     },
-                    timeout: WHATSAPP_API_TIMEOUT_MS
+                    timeout: WHATSAPP_API_TIMEOUT_MS,
+                    httpsAgent: metaHttpsAgent
                 }
             );
 

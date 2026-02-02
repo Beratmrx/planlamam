@@ -1,9 +1,7 @@
 FROM node:22-slim
 
-# Sadece temel sistem paketleri
-RUN apt-get update && apt-get install -y \
-  ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+# node:22-slim zaten HTTPS için yeterli sertifikalara sahip; apt-get VDS'te DNS hatası verirse build bu sayede tamamlanır.
+# Gerekirse VDS'te Docker DNS ayarlayın: /etc/docker/daemon.json → "dns": ["8.8.8.8"]
 
 WORKDIR /app
 

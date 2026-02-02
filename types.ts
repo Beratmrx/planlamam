@@ -22,6 +22,9 @@ export interface Task {
   requiresPhoto?: boolean;
   completionPhotoDataUrl?: string;
   isExpired?: boolean;
+  scheduledFor?: number; // Timestamp when task becomes active
+  reminderStartTime?: string; // HH:mm
+  reminderInterval?: number; // Minutes
 }
 
 export interface Category {
@@ -52,6 +55,14 @@ export interface Rental {
   paidAt?: number;
   lastReminderMonth?: string;
   createdAt: number;
+  paidAmount?: number; // Total amount paid for current month
+  paymentHistory?: Array<{
+    date: number;
+    amount: number;
+    paidByUserId: string;
+    note?: string;
+  }>;
+  balanceReminder?: number; // Timestamp for reminder
 }
 
 export interface AssetItem {

@@ -44,3 +44,9 @@ create table if not exists app_settings (
   updated_at timestamp not null default current_timestamp on update current_timestamp
 );
 
+create table if not exists account_entries (
+  id varchar(191) primary key,
+  data json not null,
+  updated_at timestamp not null default current_timestamp on update current_timestamp
+);
+

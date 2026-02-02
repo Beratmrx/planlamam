@@ -5,6 +5,25 @@ import { DEFAULT_CATEGORIES, CATEGORY_COLORS, CATEGORY_ICONS } from './constants
 import { PlusIcon, TrashIcon, SparklesIcon, CheckIcon } from './components/Icons';
 import { initializeWhatsApp, getWhatsAppStatus, sendWhatsAppMessage, logoutWhatsApp } from './services/whatsappService';
 
+type Expense = {
+  id: string;
+  description: string;
+  amount: number;
+};
+
+type AccountEntry = {
+  id: string;
+  date: string;
+  cash: number;
+  pos: number;
+  transfer: number;
+  expenses: Expense[];
+  photos: string[]; // Base64
+  note?: string;
+  createdAt: number;
+  createdByUserId: string;
+};
+
 const ENV_BACKEND_URL = (import.meta as any).env?.VITE_BACKEND_URL as string | undefined;
 const inferredHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
 const INFERRED_BACKEND_URL = `http://${inferredHost}:3002`;
@@ -26,9 +45,10 @@ const App: React.FC = () => {
   const [isHydrated, setIsHydrated] = useState(false);
   const [nowTs, setNowTs] = useState(Date.now());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [activeSection, setActiveSection] = useState<'home' | 'tasks' | 'rentals' | 'assets'>('home');
+  const [activeSection, setActiveSection] = useState<'home' | 'tasks' | 'rentals' | 'assets' | 'account'>('home');
   const [rentals, setRentals] = useState<Rental[]>([]);
   const [assets, setAssets] = useState<AssetItem[]>([]);
+  const [accountEntries, setAccountEntries] = useState<AccountEntry[]>([]);
 
   // UI States
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
@@ -57,6 +77,13 @@ const App: React.FC = () => {
   const [isCompletionPhotoModalOpen, setIsCompletionPhotoModalOpen] = useState(false);
   const [activeCompletionPhotoTaskId, setActiveCompletionPhotoTaskId] = useState<string | null>(null);
   const [completionPhotoDataUrl, setCompletionPhotoDataUrl] = useState<string | null>(null);
+  const [newTaskScheduled, setNewTaskScheduled] = useState(false);
+  const [newTaskScheduleDate, setNewTaskScheduleDate] = useState('');
+  const [newTaskScheduleTime, setNewTaskScheduleTime] = useState('');
+  const [newTaskReminderStartTime, setNewTaskReminderStartTime] = useState('');
+  const [newTaskReminderInterval, setNewTaskReminderInterval] = useState<number | ''>('');
+  const [activeTaskDetailId, setActiveTaskDetailId] = useState<string | null>(null);
+  const [isTaskDetailModalOpen, setIsTaskDetailModalOpen] = useState(false);
   const [newUserName, setNewUserName] = useState('');
   const [newUserRole, setNewUserRole] = useState<'admin' | 'user'>('user');
   const [newUserPhone, setNewUserPhone] = useState('');
@@ -70,6 +97,15 @@ const App: React.FC = () => {
   const [newRentalDueDay, setNewRentalDueDay] = useState('1');
   const [newRentalAmount, setNewRentalAmount] = useState('');
   const [isAssetModalOpen, setIsAssetModalOpen] = useState(false);
+
+  // Rental Payment States
+  const [isRentalPaymentModalOpen, setIsRentalPaymentModalOpen] = useState(false);
+  const [activeRentalPaymentId, setActiveRentalPaymentId] = useState<string | null>(null);
+  const [rentalPaymentAmount, setRentalPaymentAmount] = useState('');
+  const [rentalPaymentNote, setRentalPaymentNote] = useState('');
+  const [rentalPaymentSetReminder, setRentalPaymentSetReminder] = useState(false);
+  const [rentalPaymentReminderDate, setRentalPaymentReminderDate] = useState('');
+  const [rentalPaymentReminderTime, setRentalPaymentReminderTime] = useState('');
   const [newAssetName, setNewAssetName] = useState('');
   const [newAssetRoom, setNewAssetRoom] = useState('');
   const [newAssetDate, setNewAssetDate] = useState('');
@@ -81,6 +117,28 @@ const App: React.FC = () => {
   const [homeFilterText, setHomeFilterText] = useState('');
   const [tasksAllFilterCategory, setTasksAllFilterCategory] = useState('all');
   const [tasksAllFilterText, setTasksAllFilterText] = useState('');
+
+  // Account States
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [activeAccountEntryId, setActiveAccountEntryId] = useState<string | null>(null);
+  const [accountDate, setAccountDate] = useState(new Date().toISOString().slice(0, 10));
+  const [accountCash, setAccountCash] = useState('');
+  const [accountPos, setAccountPos] = useState('');
+  const [accountTransfer, setAccountTransfer] = useState('');
+  const [accountNote, setAccountNote] = useState('');
+  const [accountExpenses, setAccountExpenses] = useState<Expense[]>([]);
+  const [accountPhotos, setAccountPhotos] = useState<string[]>([]);
+  const [accountFilterStart, setAccountFilterStart] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [accountFilterEnd, setAccountFilterEnd] = useState(new Date().toISOString().slice(0, 10));
+  const [isAccountDetailModalOpen, setIsAccountDetailModalOpen] = useState(false);
+  const [isConfirmActionModalOpen, setIsConfirmActionModalOpen] = useState(false);
+  const [confirmActionCallback, setConfirmActionCallback] = useState<(() => void) | null>(null);
+  const [confirmActionMessage, setConfirmActionMessage] = useState('');
+  const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
 
   // Daily Report States
   const [homeView, setHomeView] = useState<'tasks' | 'report'>('tasks');
@@ -103,6 +161,12 @@ const App: React.FC = () => {
     message: string;
     icon: string;
   }>({ show: false, message: '', icon: '' });
+
+  // Task Completion Confirmation Modal
+  const [confirmTaskModal, setConfirmTaskModal] = useState<{
+    isOpen: boolean;
+    task: Task | null;
+  }>({ isOpen: false, task: null });
 
   const saveTimerRef = useRef<number | null>(null);
   const lastStorageSyncRef = useRef(0);
@@ -152,14 +216,13 @@ const App: React.FC = () => {
       createdByUserId: task.createdByUserId || fallbackUserId,
       assignedToUserId: task.assignedToUserId || fallbackUserId,
       expectedDuration: task.expectedDuration || '01:00',
-      expectedDurationMinutes: task.expectedDurationMinutes,
-      dueAt: task.dueAt,
-      repeat: task.repeat || 'once',
-      lastCompletedDate: task.lastCompletedDate,
       remindersSentMinutes: task.remindersSentMinutes || [],
       auditItems: task.auditItems || [],
       auditResults: task.auditResults || [],
       requiresPhoto: task.requiresPhoto ?? false,
+      scheduledFor: task.scheduledFor,
+      reminderStartTime: task.reminderStartTime,
+      reminderInterval: task.reminderInterval,
       completionPhotoDataUrl: task.completionPhotoDataUrl,
       isExpired: task.isExpired || false
     }));
@@ -175,6 +238,7 @@ const App: React.FC = () => {
     const savedAuditOptions = localStorage.getItem('planla_audit_options_v1');
     const savedRentals = localStorage.getItem('planla_rentals_v1');
     const savedAssets = localStorage.getItem('planla_assets_v1');
+    const savedAccountEntries = localStorage.getItem('planla_account_entries_v1');
 
     let initialUsers: User[] = [];
     if (savedUsers) {
@@ -200,6 +264,7 @@ const App: React.FC = () => {
     const auditOptions = savedAuditOptions ? JSON.parse(savedAuditOptions) : [];
     const rentals = savedRentals ? JSON.parse(savedRentals) : [];
     const assets = savedAssets ? JSON.parse(savedAssets) : [];
+    const accountEntries = savedAccountEntries ? JSON.parse(savedAccountEntries) : [];
 
     return {
       users: normalizedUsers,
@@ -213,6 +278,7 @@ const App: React.FC = () => {
       auditOptions: Array.isArray(auditOptions) ? auditOptions : [],
       rentals: Array.isArray(rentals) ? rentals : [],
       assets: Array.isArray(assets) ? assets : [],
+      accountEntries: Array.isArray(accountEntries) ? accountEntries : [],
       activeSection: 'home'
     };
   };
@@ -245,10 +311,11 @@ const App: React.FC = () => {
     setAuditOptions(Array.isArray(data?.auditOptions) ? data.auditOptions : []);
     setRentals(Array.isArray(data?.rentals) ? data.rentals : []);
     setAssets(Array.isArray(data?.assets) ? data.assets : []);
+    setAccountEntries(Array.isArray(data?.accountEntries) ? data.accountEntries : []);
 
     // FIX: Don't reset active section during background sync to avoid interrupting user
     if (!isBackgroundSync) {
-      const resolvedSection = ['home', 'tasks', 'rentals', 'assets'].includes(localActiveSection || data?.activeSection)
+      const resolvedSection = ['home', 'tasks', 'rentals', 'assets', 'account'].includes(localActiveSection || data?.activeSection)
         ? (localActiveSection || data?.activeSection)
         : 'home';
       setActiveSection(resolvedSection);
@@ -296,7 +363,8 @@ const App: React.FC = () => {
             secondPhoneNumber: fallbackData.secondPhoneNumber,
             auditOptions: fallbackData.auditOptions,
             rentals: fallbackData.rentals,
-            assets: fallbackData.assets
+            assets: fallbackData.assets,
+            accountEntries: fallbackData.accountEntries
           };
           await fetch(`${BACKEND_URL}/api/storage`, {
             method: 'POST',
@@ -361,15 +429,22 @@ const App: React.FC = () => {
         secondPhoneNumber,
         auditOptions,
         rentals,
-        assets
+        assets,
+        accountEntries
       };
       try {
-        await fetch(`${BACKEND_URL}/api/storage`, {
+        const response = await fetch(`${BACKEND_URL}/api/storage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        lastStorageSyncRef.current = Date.now();
+        const resData = await response.json();
+        if (resData.success && resData.savedAt) {
+          lastStorageSyncRef.current = resData.savedAt;
+        } else {
+          // Fallback if server old version
+          lastStorageSyncRef.current = Date.now();
+        }
       } catch (error) {
         console.error('Storage kaydetme hatası:', error);
       }
@@ -391,6 +466,7 @@ const App: React.FC = () => {
     auditOptions,
     rentals,
     assets,
+    accountEntries,
     activeSection,
     isHydrated
   ]);
@@ -566,30 +642,17 @@ const App: React.FC = () => {
     const checkStatus = async () => {
       const status = await getWhatsAppStatus();
       setWhatsAppReady(status.ready);
-      setQrCode(status.qrCode);
+      // Cloud API'de QR kod yok
+      // setQrCode(status.qrCode); 
 
-      // Backend restart / crash durumunda (hasClient:false) yeniden başlatmayı tekrar denemeliyiz.
-      // ANCAK: Sadece kullanıcı manuel olarak "WhatsApp Aç" butonuna bastıysa (whatsAppEnabled: true)
-      if (!status.hasClient && whatsAppEnabled) {
-        setWhatsAppInitRequested(false);
-      }
-
-      // Otomatik yeniden başlatma: Sadece whatsAppEnabled TRUE ve henüz initialize edilmemişse
-      if (!status.hasClient && !whatsAppInitRequested && whatsAppEnabled) {
-        console.log('🔄 WhatsApp client yok, otomatik başlatılıyor...');
-        const result = await initializeWhatsApp();
-        if (!result.success) {
-          console.error('WhatsApp başlatma hatası:', result.message);
-          return;
-        }
-        setWhatsAppInitRequested(true);
-      }
+      // Cloud API stateless olduğu için "client çöktü" durumu yok. 
+      // Sadece credentials kontrolü yapıyoruz.
     };
 
     checkStatus();
-    const interval = setInterval(checkStatus, 3000);
+    const interval = setInterval(checkStatus, 30000);
     return () => clearInterval(interval);
-  }, [whatsAppEnabled, whatsAppInitRequested]);
+  }, [whatsAppEnabled]);
 
   useEffect(() => {
     if (!whatsAppEnabled) {
@@ -706,7 +769,7 @@ const App: React.FC = () => {
     let list = visibleByUser;
     if (homeFilterStatus !== 'all') {
       if (homeFilterStatus === 'active') {
-        list = list.filter(t => !t.isCompleted && !t.isExpired);
+        list = list.filter(t => !t.isCompleted && !t.isExpired && (!t.scheduledFor || t.scheduledFor <= nowTs));
       } else if (homeFilterStatus === 'completed') {
         list = list.filter(t => t.isCompleted);
       } else if (homeFilterStatus === 'expired') {
@@ -923,6 +986,11 @@ const App: React.FC = () => {
     setNewTaskRepeat('once');
     setSelectedAuditOptions([]);
     setNewTaskRequiresPhoto(false);
+    setNewTaskScheduled(false);
+    setNewTaskScheduleDate('');
+    setNewTaskScheduleTime('');
+    setNewTaskReminderStartTime('');
+    setNewTaskReminderInterval('');
     setEditingTaskId(null);
     // ✅ FIX: Reset selectedTaskCategoryId to prevent state conflicts
     setSelectedTaskCategoryId(null);
@@ -1000,6 +1068,11 @@ const App: React.FC = () => {
       auditItems: isAuditCategory ? selectedAuditOptions : [],
       auditResults: [],
       requiresPhoto: !isAuditCategory ? newTaskRequiresPhoto : false,
+      scheduledFor: newTaskScheduled && newTaskScheduleDate && newTaskScheduleTime
+        ? new Date(`${newTaskScheduleDate}T${newTaskScheduleTime}`).getTime()
+        : undefined,
+      reminderStartTime: newTaskReminderStartTime || undefined,
+      reminderInterval: typeof newTaskReminderInterval === 'number' ? newTaskReminderInterval : undefined,
       completionPhotoDataUrl: undefined
     };
 
@@ -1021,16 +1094,26 @@ const App: React.FC = () => {
 
     // Send WhatsApp notification asynchronously
     const assignedUser = users.find(u => u.id === assignedId);
+    console.log('🔍 WhatsApp Bildirim Debug:');
+    console.log('  - whatsAppEnabled:', whatsAppEnabled);
+    console.log('  - whatsAppReady:', whatsAppReady);
+    console.log('  - assignedUser:', assignedUser);
+    console.log('  - phoneNumber:', assignedUser?.phoneNumber);
+
     if ((whatsAppEnabled || whatsAppReady) && assignedUser?.phoneNumber) {
       const category = categories.find(c => c.id === categoryIdToUse);
       const repeatLabel = newTaskRepeat === 'daily' ? 'Her gün' : 'Tek sefer';
       const durationLabel = newTaskExpectedDuration.trim() || '01:00';
       const message = `📌 Yeni görev atandı!\n\n📝 ${finalTitle.trim()}\n📁 Kategori: ${category?.name || 'Bilinmiyor'}\n⏱️ Süre: ${durationLabel}\n🔁 Tekrar: ${repeatLabel}\n\nLütfen görevi tamamlayın.`;
+      console.log('📤 WhatsApp mesajı gönderiliyor:', message);
       try {
-        await sendWhatsAppMessage(assignedUser.phoneNumber, message);
+        const result = await sendWhatsAppMessage(assignedUser.phoneNumber, message);
+        console.log('✅ WhatsApp mesaj sonucu:', result);
       } catch (error) {
-        console.error('WhatsApp görev atama hatası:', error);
+        console.error('❌ WhatsApp görev atama hatası:', error);
       }
+    } else {
+      console.log('⚠️ WhatsApp bildirimi gönderilmedi - koşullar sağlanmadı');
     }
   };
 
@@ -1071,7 +1154,7 @@ const App: React.FC = () => {
     setWhatsAppReady(false);
     setQrCode(null);
     setWhatsAppInitRequested(false);
-    setShowWhatsAppSettings(false); // Modal'ı kapat
+    setIsWhatsAppModalOpen(false); // Modal'ı kapat
     localStorage.setItem('planla_whatsapp_enabled', 'false');
 
     // SONRA logout API'yi çağır
@@ -1364,6 +1447,29 @@ const App: React.FC = () => {
     }
   };
 
+  const handleRequestTaskCompletion = (task: Task) => {
+    if (task.isExpired) return;
+
+    // Eğer görev zaten tamamlanmışsa, direk geri al (onay sorma)
+    if (task.isCompleted) {
+      toggleTask(task.id);
+      return;
+    }
+
+    // Tamamlanmamışsa onay iste
+    setConfirmTaskModal({ isOpen: true, task });
+  };
+
+  const handleConfirmTaskCompletion = () => {
+    if (confirmTaskModal.task) {
+      toggleTask(confirmTaskModal.task.id);
+      setConfirmTaskModal({ isOpen: false, task: null });
+
+      // Success confetti/notification
+      showSuccessNotification('Görev tamamlandı! Harika iş! ⭐', '✅');
+    }
+  };
+
   const deleteTask = (taskId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!isAdmin) {
@@ -1409,6 +1515,80 @@ const App: React.FC = () => {
     setIsRentalModalOpen(false);
     setActiveSection('rentals');
   };
+
+  const openRentalPaymentModal = (rentalId: string) => {
+    const rental = rentals.find(r => r.id === rentalId);
+    if (!rental) return;
+
+    setActiveRentalPaymentId(rentalId);
+    setRentalPaymentAmount('');
+    setRentalPaymentNote('');
+    setRentalPaymentSetReminder(false);
+    setRentalPaymentReminderDate('');
+    setRentalPaymentReminderTime('');
+    setIsRentalPaymentModalOpen(true);
+  };
+
+  const handleSaveRentalPayment = () => {
+    if (!activeRentalPaymentId) return;
+    const amount = parseFloat(rentalPaymentAmount);
+    if (isNaN(amount) || amount <= 0) {
+      alert('Lütfen geçerli bir ödeme tutarı girin.');
+      return;
+    }
+
+    const reminderTimestamp = rentalPaymentSetReminder && rentalPaymentReminderDate && rentalPaymentReminderTime
+      ? new Date(`${rentalPaymentReminderDate}T${rentalPaymentReminderTime}`).getTime()
+      : undefined;
+
+    setRentals(prev => prev.map(rental => {
+      if (rental.id !== activeRentalPaymentId) return rental;
+
+      const currentPaid = rental.paidAmount || 0;
+      const newPaid = currentPaid + amount;
+      const isFullyPaid = newPaid >= rental.amount;
+
+      const paymentRecord = {
+        date: Date.now(),
+        amount: amount,
+        paidByUserId: currentUserId || 'unknown',
+        note: rentalPaymentNote.trim()
+      };
+
+      const history = rental.paymentHistory ? [...rental.paymentHistory, paymentRecord] : [paymentRecord];
+
+      // If fully paid, mark as paid for current month
+      // If NOT fully paid, we keep isPaid false but update paidAmount
+      // However, if it WAS isPaid=true (maybe manually set), and we add more?? 
+      // Actually if it's already Paid, usually we wouldn't add payment? 
+      // Let's assume we can add extra payment anytime.
+
+      const monthKey = getMonthKey(new Date());
+
+      return {
+        ...rental,
+        paidAmount: newPaid,
+        paymentHistory: history,
+        isPaid: isFullyPaid,
+        paidMonth: isFullyPaid ? monthKey : undefined,
+        paidByUserId: isFullyPaid ? (currentUserId || rental.paidByUserId) : undefined,
+        paidAt: isFullyPaid ? Date.now() : rental.paidAt,
+        balanceReminder: reminderTimestamp
+      };
+    }));
+
+    if (reminderTimestamp) {
+      showSuccessNotification('Ödeme alındı ve hatırlatma kuruldu! ⏰', '✅');
+    } else {
+      showSuccessNotification('Ödeme başarıyla kaydedildi! 💰', '✅');
+    }
+
+    setIsRentalPaymentModalOpen(false);
+    setActiveRentalPaymentId(null);
+  };
+
+  // Replaced toggleRentalPaid with this logic, keeping old for reference if needed
+  // But we will remove simple toggle button from UI and use this modal opener.
 
   const toggleRentalPaid = (rentalId: string) => {
     const monthKey = getMonthKey(new Date());
@@ -1472,6 +1652,122 @@ const App: React.FC = () => {
       return;
     }
     setAssets(prev => prev.filter(item => item.id !== assetId));
+  };
+
+  const handleAddAccountEntry = () => {
+    if (!accountCash && !accountPos && !accountTransfer && accountExpenses.length === 0) {
+      alert('Lütfen en az bir gelir veya gider girin.');
+      return;
+    }
+
+    const newEntry: AccountEntry = {
+      id: activeAccountEntryId || `entry-${Date.now()}`,
+      date: accountDate,
+      cash: parseFloat(accountCash) || 0,
+      pos: parseFloat(accountPos) || 0,
+      transfer: parseFloat(accountTransfer) || 0,
+      expenses: accountExpenses,
+      photos: accountPhotos,
+      note: accountNote,
+      createdAt: activeAccountEntryId ? (accountEntries.find(e => e.id === activeAccountEntryId)?.createdAt || Date.now()) : Date.now(),
+      createdByUserId: currentUser?.id || 'unknown'
+    };
+
+    if (activeAccountEntryId) {
+      setAccountEntries(prev => prev.map(e => e.id === activeAccountEntryId ? newEntry : e));
+      showSuccessNotification('Hesap kaydı güncellendi! 💰', '✅');
+    } else {
+      setAccountEntries(prev => [...prev, newEntry]);
+      showSuccessNotification('Hesap kaydı eklendi! 💰', '✅');
+    }
+
+    setIsAccountModalOpen(false);
+    resetAccountForm();
+  };
+
+  const deleteAccountEntry = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (currentUser?.role !== 'admin') {
+      alert('Sadece admin silebilir.');
+      return;
+    }
+    if (confirm('Bu kaydı silmek istediğinize emin misiniz?')) {
+      setAccountEntries(prev => prev.filter(e => e.id !== id));
+    }
+  };
+
+  const resetAccountForm = () => {
+    setActiveAccountEntryId(null);
+    setAccountDate(new Date().toISOString().slice(0, 10));
+    setAccountCash('');
+    setAccountPos('');
+    setAccountTransfer('');
+    setAccountExpenses([]);
+    setAccountPhotos([]);
+    setAccountNote('');
+  };
+
+  const openAccountModal = (entry?: AccountEntry) => {
+    if (entry) {
+      setActiveAccountEntryId(entry.id);
+      setAccountDate(entry.date);
+      setAccountCash(entry.cash ? entry.cash.toString() : '');
+      setAccountPos(entry.pos ? entry.pos.toString() : '');
+      setAccountTransfer(entry.transfer ? entry.transfer.toString() : '');
+      setAccountExpenses(entry.expenses || []);
+      setAccountPhotos(entry.photos || []);
+      setAccountNote(entry.note || '');
+    } else {
+      resetAccountForm();
+    }
+    setIsAccountModalOpen(true);
+  };
+
+  const handleAccountPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (accountPhotos.length >= 2) {
+      alert('En fazla 2 fotoğraf yükleyebilirsiniz.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setAccountPhotos(prev => [...prev, reader.result as string]);
+    };
+    reader.readAsDataURL(file);
+    reader.readAsDataURL(file);
+  };
+
+  const openAccountDetailModal = (entry: AccountEntry) => {
+    setActiveAccountEntryId(entry.id);
+    setIsAccountDetailModalOpen(true);
+  };
+
+  const handleEditFromDetail = () => {
+    setIsAccountDetailModalOpen(false);
+    const entry = accountEntries.find(e => e.id === activeAccountEntryId);
+    if (entry) {
+      openAccountModal(entry);
+    }
+  };
+
+  const handleDeleteWithConfirm = () => {
+    if (!activeAccountEntryId) return;
+    setConfirmActionMessage('Bu hesap kaydını silmek istediğinize emin misiniz?');
+    setConfirmActionCallback(() => () => {
+      deleteAccountEntry(activeAccountEntryId);
+      setIsAccountDetailModalOpen(false);
+      setIsConfirmActionModalOpen(false);
+    });
+    setIsConfirmActionModalOpen(true);
+  };
+
+  const executeConfirmAction = () => {
+    if (confirmActionCallback) {
+      confirmActionCallback();
+    }
   };
 
   // 🔒 Zorunlu giriş: oturum açmadan uygulama ekranları görünmesin
@@ -1592,7 +1888,7 @@ const App: React.FC = () => {
                     setActiveSection('tasks');
                     setActiveCategoryId(null); // "Tüm Görevler" görünümü
                   }}
-                  className={`mt-3 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${activeSection === 'tasks' && !activeCategoryId ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
+                  className={`mt-3 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${activeSection === 'tasks' ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
                     }`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
@@ -1600,35 +1896,7 @@ const App: React.FC = () => {
                     <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Görevler</span>
                   </div>
                 </div>
-                {categories.map((cat) => (
-                  <div
-                    key={cat.id}
-                    onClick={(e) => {
-                      // Prevent navigation if clicking on delete button
-                      if ((e.target as HTMLElement).closest('button[data-delete]')) {
-                        return;
-                      }
-                      setActiveSection('tasks');
-                      setActiveCategoryId(cat.id);
-                    }}
-                    className={`group flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${activeSection === 'tasks' && activeCategoryId === cat.id
-                      ? `active-pill text-slate-900 translate-x-1`
-                      : 'hover:bg-white/70 text-slate-700'
-                      }`}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-xl leading-none">{cat.icon}</span>
-                      <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">{cat.name}</span>
-                    </div>
-                    <button
-                      data-delete
-                      onClick={(e) => handleDeleteCategory(cat.id, e)}
-                      className="p-2 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity hover:bg-rose-50 hover:text-rose-600"
-                    >
-                      <TrashIcon className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
+
                 <button
                   onClick={() => setIsCategoryModalOpen(true)}
                   className="w-full mt-6 py-4 border-2 border-dashed border-slate-300/70 rounded-3xl text-slate-600 hover:border-indigo-400 transition-all flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest bg-white/70 hover:bg-white btn-glow tap-scale"
@@ -1655,11 +1923,22 @@ const App: React.FC = () => {
                     <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Stok</span>
                   </div>
                 </div>
+
+                <div
+                  onClick={() => setActiveSection('account')}
+                  className={`mt-3 flex items-center justify-between p-4 rounded-3xl cursor-pointer transition-all duration-300 hover-glow ${activeSection === 'account' ? 'active-pill text-slate-900 translate-x-1' : 'hover:bg-white/70 text-slate-700'
+                    }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xl leading-none">💰</span>
+                    <span className="font-black tracking-tight text-[13px] leading-none truncate whitespace-nowrap">Hesap</span>
+                  </div>
+                </div>
               </nav>
             </aside>
 
             {/* Main Content */}
-            <main className="flex-1 p-6 pb-28 lg:pb-12 lg:p-12 overflow-y-auto custom-scrollbar">
+            <main className="flex-1 p-6 pb-40 lg:pb-12 lg:p-12 overflow-y-auto custom-scrollbar">
               {activeSection === 'home' ? (
                 <div className="max-w-4xl mx-auto space-y-10">
                   <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 md:gap-6 header-glass p-5 sm:p-6 md:p-8 rounded-[2.5rem] overflow-hidden">
@@ -1947,7 +2226,11 @@ const App: React.FC = () => {
                           return (
                             <div
                               key={task.id}
-                              className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${task.isExpired ? 'ring-2 ring-rose-300/60' : task.isCompleted ? 'opacity-70' : ''
+                              onClick={() => {
+                                setActiveTaskDetailId(task.id);
+                                setIsTaskDetailModalOpen(true);
+                              }}
+                              className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow cursor-pointer ${task.isExpired ? 'ring-2 ring-rose-300/60' : task.isCompleted ? 'opacity-70' : ''
                                 }`}
                             >
                               {/* Left color bar */}
@@ -2013,119 +2296,159 @@ const App: React.FC = () => {
                   )}
                 </div>
               ) : activeSection === 'tasks' ? (
-                activeCategory ? (
-                  <div className="max-w-4xl mx-auto space-y-10">
-                    <header className="relative overflow-hidden header-glass p-8 rounded-[2.5rem]">
-                      <div className="absolute inset-0 pointer-events-none">
-                        <div className={`absolute -top-16 -left-16 h-56 w-56 rounded-full ${activeCategory.color} opacity-20 blur-3xl`} />
-                        <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
-                      </div>
+                <div className="max-w-4xl mx-auto space-y-10">
+                  <header className="relative overflow-hidden header-glass p-8 rounded-[2.5rem]">
+                    <div className="absolute inset-0 pointer-events-none">
+                      <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
+                      <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-fuchsia-500/10 blur-3xl" />
+                    </div>
 
-                      <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
-                        <div className="flex items-center gap-2 md:gap-4">
-                          <div className={`text-6xl p-7 rounded-[2.2rem] ${activeCategory.color} text-white shadow-2xl shadow-slate-200 transform -rotate-2 float-slow`}>
-                            {activeCategory.icon}
-                          </div>
-                          <div>
-                            <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">{activeCategory.name}</h2>
-                            <div className="flex items-center gap-2 mt-2">
-                              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                              <p className="text-slate-600 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
-                                {taskView === 'active' ? activeTasks.length : taskView === 'completed' ? completedTasks.length : expiredTasks.length} {taskView === 'active' ? 'Aktif Görev' : taskView === 'completed' ? 'Tamamlanan Görev' : 'Yapılmayan Görev'}
-                              </p>
-                            </div>
+                    <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
+                      <div className="flex items-center gap-2 md:gap-4">
+                        <div className="text-6xl p-7 rounded-[2.2rem] bg-gradient-to-br from-indigo-600 to-blue-500 text-white shadow-2xl shadow-indigo-200/60 transform -rotate-2 float-slow">
+                          📝
+                        </div>
+                        <div>
+                          <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">Görevler</h2>
+                          <div className="flex items-center gap-2 mt-2">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                            <p className="text-slate-600 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
+                              {tasksAllFiltered.length} kayıt · {tasksAllFilterCategory === 'all' ? 'Tüm kategoriler' : (categories.find(c => c.id === tasksAllFilterCategory)?.name || 'Kategori')}
+                            </p>
                           </div>
                         </div>
+                      </div>
 
-                        {/* Desktop add button (mobile uses FAB) */}
+                      {/* Desktop add button (mobile uses FAB) */}
+                      {/* Add Button - Visible on Mobile now */}
+                      <button
+                        onClick={() => openCreateTaskModal(tasksAllFilterCategory !== 'all' ? tasksAllFilterCategory : null)}
+                        className="flex group items-center gap-4 px-6 md:px-10 py-5 md:py-6 btn-accent btn-glow text-white rounded-[2rem] font-black hover:opacity-95 transition-all tap-scale text-xs md:text-sm"
+                      >
+                        <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
+                        <span className="md:hidden">EKLE</span>
+                        <span className="hidden md:inline">GÖREV EKLE</span>
+                      </button>
+                    </div>
+
+                    {/* Segmented control */}
+                    <div className="relative mt-6 md:mt-8">
+                      <div className="md:hidden sticky top-3 z-20">
+                        <div className="mx-auto max-w-[520px] bg-white/80 border border-slate-200/70 rounded-full p-1 shadow-lg shadow-slate-200/70 backdrop-blur-xl">
+                          <div className="grid grid-cols-3 gap-1">
+                            <button
+                              onClick={() => setTaskView('active')}
+                              className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                                }`}
+                            >
+                              Aktif
+                            </button>
+                            <button
+                              onClick={() => setTaskView('completed')}
+                              className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                                }`}
+                            >
+                              Tamamlanan
+                            </button>
+                            <button
+                              onClick={() => setTaskView('expired')}
+                              className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
+                                }`}
+                            >
+                              Yapılmayan
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="hidden md:flex items-center gap-2">
                         <button
-                          onClick={() => openCreateTaskModal(activeCategoryId)}
-                          className="hidden md:flex group items-center gap-4 px-10 py-6 btn-accent btn-glow text-white rounded-[2rem] font-black hover:opacity-95 transition-all tap-scale"
+                          onClick={() => setTaskView('active')}
+                          className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                            }`}
                         >
-                          <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
-                          GÖREV EKLE
+                          Aktif
+                        </button>
+                        <button
+                          onClick={() => setTaskView('completed')}
+                          className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                            }`}
+                        >
+                          Tamamlanan
+                        </button>
+                        <button
+                          onClick={() => setTaskView('expired')}
+                          className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
+                            }`}
+                        >
+                          Yapılmayan
                         </button>
                       </div>
+                    </div>
+                  </header>
 
-                      {/* Segmented control (sticky on mobile) */}
-                      <div className="relative mt-6 md:mt-8">
-                        <div className="md:hidden sticky top-3 z-20">
-                          <div className="mx-auto max-w-[520px] bg-white/80 border border-slate-200/70 rounded-full p-1 shadow-lg shadow-slate-200/70 backdrop-blur-xl">
-                            <div className="grid grid-cols-3 gap-1">
-                              <button
-                                onClick={() => setTaskView('active')}
-                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                                  }`}
-                              >
-                                Aktif
-                              </button>
-                              <button
-                                onClick={() => setTaskView('completed')}
-                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                                  }`}
-                              >
-                                Tamamlanan
-                              </button>
-                              <button
-                                onClick={() => setTaskView('expired')}
-                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                                  }`}
-                              >
-                                Yapılmayan
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="hidden md:flex items-center gap-2">
-                          <button
-                            onClick={() => setTaskView('active')}
-                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                              }`}
-                          >
-                            Aktif
-                          </button>
-                          <button
-                            onClick={() => setTaskView('completed')}
-                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                              }`}
-                          >
-                            Tamamlanan
-                          </button>
-                          <button
-                            onClick={() => setTaskView('expired')}
-                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                              }`}
-                          >
-                            Yapılmayan
-                          </button>
-                        </div>
+                  {/* Filters */}
+                  <div className="card-glass rounded-[2.5rem] p-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="relative">
+                        <select
+                          value={tasksAllFilterCategory}
+                          onChange={(e) => setTasksAllFilterCategory(e.target.value)}
+                          className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
+                        >
+                          <option value="all">Tüm Kategoriler</option>
+                          {categories.map(cat => (
+                            <option key={cat.id} value={cat.id}>{cat.name}</option>
+                          ))}
+                        </select>
+                        <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          Kategori
+                        </label>
                       </div>
-                    </header>
 
-                    <div className="space-y-4">
-                      {visibleTasks.map(task => (
+                      <div className="relative md:col-span-2">
+                        <input
+                          type="text"
+                          value={tasksAllFilterText}
+                          onChange={(e) => setTasksAllFilterText(e.target.value)}
+                          placeholder=" "
+                          className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
+                        />
+                        <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          Görev adıyla ara
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    {tasksAllFiltered.map(task => {
+                      const taskCategory = categories.find(c => c.id === task.categoryId);
+                      const isTaskAudit = taskCategory?.name === 'Denetim';
+                      return (
                         <div
                           key={task.id}
                           onClick={() => {
-                            if (task.categoryId === activeCategoryId && activeCategory?.name === 'Denetim') {
+                            if (isTaskAudit) {
                               if (task.isCompleted && task.auditResults?.some(result => result.status === 'fail')) {
                                 setActiveAuditReviewTaskId(task.id);
                                 setIsAuditReviewOpen(true);
                               } else {
                                 openAuditModal(task.id);
                               }
+                            } else {
+                              handleRequestTaskCompletion(task);
                             }
                           }}
                           className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center gap-6 justify-between p-6 md:p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${task.isCompleted ? 'opacity-50 grayscale' : ''
                             }`}
                         >
                           {/* Left category bar */}
-                          <div className={`absolute left-0 top-0 bottom-0 w-2 ${activeCategory?.color || 'bg-slate-300'} opacity-80`} />
+                          <div className={`absolute left-0 top-0 bottom-0 w-2 ${taskCategory?.color || 'bg-slate-300'} opacity-80`} />
 
                           <div className="flex items-start md:items-center gap-5 md:gap-8 flex-1">
                             <button
-                              onClick={(e) => { e.stopPropagation(); if (!task.isExpired) toggleTask(task.id); }}
+                              onClick={(e) => { e.stopPropagation(); if (!task.isExpired) handleRequestTaskCompletion(task); }}
                               disabled={task.isExpired}
                               className={`w-14 h-14 md:w-12 md:h-12 rounded-2xl border flex items-center justify-center transition-all duration-300 touch-manipulation ${task.isExpired
                                 ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
@@ -2136,13 +2459,17 @@ const App: React.FC = () => {
                             >
                               {task.isCompleted && <CheckIcon className="w-8 h-8 stroke-[4px]" />}
                             </button>
-                            <div className="flex flex-col gap-2">
-                              <span className={`text-2xl font-black text-slate-900 tracking-tight transition-all ${task.isCompleted ? 'line-through opacity-60' : ''}`}>
+                            <div className="flex flex-col gap-2 min-w-0">
+                              <span className={`text-2xl font-black text-slate-900 tracking-tight transition-all truncate ${task.isCompleted ? 'line-through opacity-60' : ''}`}>
                                 {task.title}
+                              </span>
+                              <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">
+                                {taskCategory ? `${taskCategory.icon} ${taskCategory.name}` : 'Kategori Yok'}
                               </span>
                               <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
                                 Ekleyen: {users.find(u => u.id === task.createdByUserId)?.name || 'Bilinmiyor'} · Atanan: {users.find(u => u.id === task.assignedToUserId)?.name || 'Bilinmiyor'} · Süre: {task.expectedDuration || '00:00'} · {task.repeat === 'daily' ? 'Her gün' : 'Tek sefer'}
                               </span>
+
                               {task.auditItems && task.auditItems.length > 0 && (
                                 <span className="text-xs font-black text-slate-500 uppercase tracking-widest">
                                   Denetim: {task.auditItems.length} seçenek
@@ -2186,6 +2513,7 @@ const App: React.FC = () => {
                               )}
                             </div>
                           </div>
+
                           <div className="flex flex-wrap items-center gap-3 md:gap-4 justify-end">
                             {task.isCompleted && task.auditResults?.some(result => result.status === 'fail') && (
                               <button
@@ -2226,292 +2554,22 @@ const App: React.FC = () => {
                             </button>
                           </div>
                         </div>
-                      ))}
-                      {visibleTasks.length === 0 && (
-                        <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
-                          <div className="text-8xl mb-8 opacity-60 float-slow">✨</div>
-                          <h3 className="text-3xl font-black text-slate-700 tracking-tighter">
-                            {taskView === 'active' ? 'HER ŞEY YOLUNDA!' : taskView === 'completed' ? 'TAMAMLANAN YOK' : 'YAPILMAYAN YOK'}
-                          </h3>
-                          <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
-                            {taskView === 'active' ? 'Bugünlük planların bitti.' : taskView === 'completed' ? 'Henüz tamamlanan görev yok.' : 'Süresi geçen görev yok.'}
-                          </p>
-                        </div>
-                      )}
-                    </div>
+                      );
+                    })}
+
+                    {tasksAllFiltered.length === 0 && (
+                      <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
+                        <div className="text-8xl mb-8 opacity-60 float-slow">📝</div>
+                        <h3 className="text-3xl font-black text-slate-700 tracking-tighter">
+                          {taskView === 'active' ? 'AKTİF GÖREV YOK' : taskView === 'completed' ? 'TAMAMLANAN YOK' : 'YAPILMAYAN YOK'}
+                        </h3>
+                        <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                          Filtreyi değiştirerek diğer görevleri görebilirsin.
+                        </p>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="max-w-4xl mx-auto space-y-10">
-                    <header className="relative overflow-hidden header-glass p-8 rounded-[2.5rem]">
-                      <div className="absolute inset-0 pointer-events-none">
-                        <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
-                        <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-fuchsia-500/10 blur-3xl" />
-                      </div>
-
-                      <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
-                        <div className="flex items-center gap-2 md:gap-4">
-                          <div className="text-6xl p-7 rounded-[2.2rem] bg-gradient-to-br from-indigo-600 to-blue-500 text-white shadow-2xl shadow-indigo-200/60 transform -rotate-2 float-slow">
-                            📝
-                          </div>
-                          <div>
-                            <h2 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tighter">Görevler</h2>
-                            <div className="flex items-center gap-2 mt-2">
-                              <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                              <p className="text-slate-600 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
-                                {tasksAllFiltered.length} kayıt · {tasksAllFilterCategory === 'all' ? 'Tüm kategoriler' : (categories.find(c => c.id === tasksAllFilterCategory)?.name || 'Kategori')}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Desktop add button (mobile uses FAB) */}
-                        <button
-                          onClick={() => openCreateTaskModal(tasksAllFilterCategory !== 'all' ? tasksAllFilterCategory : null)}
-                          className="hidden md:flex group items-center gap-4 px-10 py-6 btn-accent btn-glow text-white rounded-[2rem] font-black hover:opacity-95 transition-all tap-scale"
-                        >
-                          <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
-                          GÖREV EKLE
-                        </button>
-                      </div>
-
-                      {/* Segmented control */}
-                      <div className="relative mt-6 md:mt-8">
-                        <div className="md:hidden sticky top-3 z-20">
-                          <div className="mx-auto max-w-[520px] bg-white/80 border border-slate-200/70 rounded-full p-1 shadow-lg shadow-slate-200/70 backdrop-blur-xl">
-                            <div className="grid grid-cols-3 gap-1">
-                              <button
-                                onClick={() => setTaskView('active')}
-                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                                  }`}
-                              >
-                                Aktif
-                              </button>
-                              <button
-                                onClick={() => setTaskView('completed')}
-                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                                  }`}
-                              >
-                                Tamamlanan
-                              </button>
-                              <button
-                                onClick={() => setTaskView('expired')}
-                                className={`py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white' : 'text-slate-600 hover:bg-white'
-                                  }`}
-                              >
-                                Yapılmayan
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="hidden md:flex items-center gap-2">
-                          <button
-                            onClick={() => setTaskView('active')}
-                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'active' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                              }`}
-                          >
-                            Aktif
-                          </button>
-                          <button
-                            onClick={() => setTaskView('completed')}
-                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'completed' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                              }`}
-                          >
-                            Tamamlanan
-                          </button>
-                          <button
-                            onClick={() => setTaskView('expired')}
-                            className={`px-5 py-3 rounded-full text-[10px] font-black uppercase tracking-widest transition-all tap-scale ${taskView === 'expired' ? 'btn-primary text-white btn-glow' : 'bg-white/70 text-slate-600 border border-slate-200/60 hover:bg-white'
-                              }`}
-                          >
-                            Yapılmayan
-                          </button>
-                        </div>
-                      </div>
-                    </header>
-
-                    {/* Filters */}
-                    <div className="card-glass rounded-[2.5rem] p-6">
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className="relative">
-                          <select
-                            value={tasksAllFilterCategory}
-                            onChange={(e) => setTasksAllFilterCategory(e.target.value)}
-                            className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700 appearance-none"
-                          >
-                            <option value="all">Tüm Kategoriler</option>
-                            {categories.map(cat => (
-                              <option key={cat.id} value={cat.id}>{cat.name}</option>
-                            ))}
-                          </select>
-                          <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                            Kategori
-                          </label>
-                        </div>
-
-                        <div className="relative md:col-span-2">
-                          <input
-                            type="text"
-                            value={tasksAllFilterText}
-                            onChange={(e) => setTasksAllFilterText(e.target.value)}
-                            placeholder=" "
-                            className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
-                          />
-                          <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
-                            Görev adıyla ara
-                          </label>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      {tasksAllFiltered.map(task => {
-                        const taskCategory = categories.find(c => c.id === task.categoryId);
-                        const isTaskAudit = taskCategory?.name === 'Denetim';
-                        return (
-                          <div
-                            key={task.id}
-                            onClick={() => {
-                              if (isTaskAudit) {
-                                if (task.isCompleted && task.auditResults?.some(result => result.status === 'fail')) {
-                                  setActiveAuditReviewTaskId(task.id);
-                                  setIsAuditReviewOpen(true);
-                                } else {
-                                  openAuditModal(task.id);
-                                }
-                              }
-                            }}
-                            className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center gap-6 justify-between p-6 md:p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow ${task.isCompleted ? 'opacity-50 grayscale' : ''
-                              }`}
-                          >
-                            {/* Left category bar */}
-                            <div className={`absolute left-0 top-0 bottom-0 w-2 ${taskCategory?.color || 'bg-slate-300'} opacity-80`} />
-
-                            <div className="flex items-start md:items-center gap-5 md:gap-8 flex-1">
-                              <button
-                                onClick={(e) => { e.stopPropagation(); if (!task.isExpired) toggleTask(task.id); }}
-                                disabled={task.isExpired}
-                                className={`w-14 h-14 md:w-12 md:h-12 rounded-2xl border flex items-center justify-center transition-all duration-300 touch-manipulation ${task.isExpired
-                                  ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
-                                  : task.isCompleted
-                                    ? 'bg-indigo-600 border-indigo-600 text-white'
-                                    : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-400 hover:shadow-lg hover:shadow-indigo-100'
-                                  }`}
-                              >
-                                {task.isCompleted && <CheckIcon className="w-8 h-8 stroke-[4px]" />}
-                              </button>
-                              <div className="flex flex-col gap-2 min-w-0">
-                                <span className={`text-2xl font-black text-slate-900 tracking-tight transition-all truncate ${task.isCompleted ? 'line-through opacity-60' : ''}`}>
-                                  {task.title}
-                                </span>
-                                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest truncate">
-                                  {taskCategory ? `${taskCategory.icon} ${taskCategory.name}` : 'Kategori Yok'}
-                                </span>
-                                <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
-                                  Ekleyen: {users.find(u => u.id === task.createdByUserId)?.name || 'Bilinmiyor'} · Atanan: {users.find(u => u.id === task.assignedToUserId)?.name || 'Bilinmiyor'} · Süre: {task.expectedDuration || '00:00'} · {task.repeat === 'daily' ? 'Her gün' : 'Tek sefer'}
-                                </span>
-
-                                {task.auditItems && task.auditItems.length > 0 && (
-                                  <span className="text-xs font-black text-slate-500 uppercase tracking-widest">
-                                    Denetim: {task.auditItems.length} seçenek
-                                  </span>
-                                )}
-
-                                <div className="mt-1 flex flex-wrap items-center gap-2">
-                                  {task.requiresPhoto && (
-                                    <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-cyan-50 text-cyan-700 border border-cyan-200">
-                                      Fotoğraf zorunlu
-                                    </span>
-                                  )}
-                                  {task.completionPhotoDataUrl && (
-                                    <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                      Fotoğraf eklendi
-                                    </span>
-                                  )}
-                                  {task.auditResults && task.auditResults.some(result => result.status === 'fail') && (
-                                    <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
-                                      Eksikler var
-                                    </span>
-                                  )}
-                                  {task.isExpired && (
-                                    <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-700 border border-rose-200">
-                                      Süresi geçti
-                                    </span>
-                                  )}
-                                </div>
-
-                                {task.dueAt && !task.isCompleted && !task.isExpired && (
-                                  <div className="mt-2">
-                                    <div className="flex items-center justify-between gap-3">
-                                      <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
-                                        Geri sayım: {formatRemaining(task.dueAt - nowTs)}
-                                      </span>
-                                    </div>
-                                    <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden border border-slate-200/70">
-                                      <div className="h-full rounded-full bg-gradient-to-r from-amber-400 via-fuchsia-400 to-indigo-500 w-[65%] animate-pulse" />
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="flex flex-wrap items-center gap-3 md:gap-4 justify-end">
-                              {task.isCompleted && task.auditResults?.some(result => result.status === 'fail') && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setActiveAuditReviewTaskId(task.id);
-                                    setIsAuditReviewOpen(true);
-                                  }}
-                                  className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all"
-                                >
-                                  Fotoğrafları Gör
-                                </button>
-                              )}
-                              {task.isExpired && currentUser?.role === 'admin' && (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); handleExtendTask(task.id); }}
-                                  className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-amber-50 text-amber-700 hover:bg-amber-100 transition-all"
-                                >
-                                  Süreyi Uzat
-                                </button>
-                              )}
-                              {!task.isExpired && !task.isCompleted && (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); openEditTaskModal(task.id); }}
-                                  className="px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white transition-all tap-scale"
-                                >
-                                  Düzenle
-                                </button>
-                              )}
-
-                              <button
-                                onClick={(e) => { e.stopPropagation(); deleteTask(task.id, e); }}
-                                disabled={!isAdmin}
-                                className={`p-3 rounded-2xl transition-all opacity-0 group-hover:opacity-100 ${!isAdmin ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
-                                  }`}
-                              >
-                                <TrashIcon className="w-6 h-6" />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-
-                      {tasksAllFiltered.length === 0 && (
-                        <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
-                          <div className="text-8xl mb-8 opacity-60 float-slow">📝</div>
-                          <h3 className="text-3xl font-black text-slate-700 tracking-tighter">
-                            {taskView === 'active' ? 'AKTİF GÖREV YOK' : taskView === 'completed' ? 'TAMAMLANAN YOK' : 'YAPILMAYAN YOK'}
-                          </h3>
-                          <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
-                            Filtreyi değiştirerek diğer görevleri görebilirsin.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )
+                </div>
               ) : activeSection === 'rentals' ? (
                 <div className="max-w-4xl mx-auto space-y-10">
                   <header className="relative overflow-hidden header-glass p-10 rounded-[3rem]">
@@ -2576,12 +2634,25 @@ const App: React.FC = () => {
                               <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-2">
                                 Kira günü: {rental.dueDay} · Tutar: {formatCurrency(rental.amount)}
                               </div>
-                              {rental.isPaidForMonth && (
-                                <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mt-2">
-                                  Ödemeyi alan:{' '}
-                                  {users.find(u => u.id === rental.paidByUserId)?.name || 'Bilinmiyor'}
+
+                              {/* Payment Progress Info */}
+                              <div className="mt-3 flex items-center gap-3">
+                                <div className="text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                  Ödendi: {formatCurrency(rental.paidAmount || 0)}
+                                </div>
+                                {(rental.amount - (rental.paidAmount || 0)) > 0 && (
+                                  <div className="text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-100">
+                                    Kalan: {formatCurrency(rental.amount - (rental.paidAmount || 0))}
+                                  </div>
+                                )}
+                              </div>
+
+                              {rental.balanceReminder && !rental.isPaidForMonth && (
+                                <div className="mt-2 text-[10px] font-black uppercase tracking-widest text-amber-600 flex items-center gap-1">
+                                  ⏰ Hatırlatma: {new Date(rental.balanceReminder).toLocaleString('tr-TR')}
                                 </div>
                               )}
+
                               {isOverdue && (
                                 <div className="mt-3 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-black uppercase tracking-widest">
                                   {rental.overdueDays} gün gecikmede
@@ -2591,13 +2662,13 @@ const App: React.FC = () => {
                           </div>
                           <div className="flex items-center gap-3">
                             <button
-                              onClick={() => toggleRentalPaid(rental.id)}
-                              className={`px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all tap-scale ${rental.isPaidForMonth
-                                ? 'bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white'
-                                : 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-lg shadow-emerald-200'
+                              onClick={() => openRentalPaymentModal(rental.id)}
+                              className={`px-6 py-3 rounded-full text-xs font-black uppercase tracking-widest transition-all tap-scale ${rental.isPaidForMonth
+                                ? 'bg-emerald-100 text-emerald-700 border border-emerald-200 hover:bg-emerald-200'
+                                : 'bg-slate-900 text-white hover:bg-slate-800 shadow-lg'
                                 }`}
                             >
-                              {rental.isPaidForMonth ? 'Ödeme İptal' : 'Ödendi'}
+                              {rental.isPaidForMonth ? 'Detay / Düzenle' : 'Ödeme Gir'}
                             </button>
                             <button
                               onClick={() => deleteRental(rental.id)}
@@ -2617,6 +2688,196 @@ const App: React.FC = () => {
                         <h3 className="text-3xl font-black text-slate-700 tracking-tighter">KİRA KAYDI YOK</h3>
                         <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
                           İlk kira kaydını ekleyin.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : activeSection === 'account' ? (
+                <div className="max-w-4xl mx-auto space-y-10">
+                  <header className="relative overflow-hidden header-glass p-10 rounded-[3rem]">
+                    <div className="absolute inset-0 pointer-events-none">
+                      <div className="absolute -top-16 -left-16 h-56 w-56 rounded-full bg-indigo-500/10 blur-3xl" />
+                      <div className="absolute -bottom-16 -right-16 h-56 w-56 rounded-full bg-fuchsia-500/10 blur-3xl" />
+                    </div>
+                    <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-8">
+                      <div className="flex items-center gap-2 md:gap-4">
+                        <div className="text-6xl p-8 rounded-[2.5rem] bg-indigo-500 text-white shadow-2xl shadow-indigo-200 transform -rotate-2 float-slow">
+                          💰
+                        </div>
+                        <div>
+                          <h2 className="text-4xl font-black text-slate-800 tracking-tighter">Hesap</h2>
+                          <div className="flex items-center gap-2 mt-2">
+                            <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                            <p className="text-slate-400 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
+                              {accountEntries.filter(e => e.date >= accountFilterStart && e.date <= accountFilterEnd).length} kayıt
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => openAccountModal()}
+                        className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-indigo-500 via-purple-500 to-fuchsia-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-95 transition-all active:scale-95 shadow-indigo-200 btn-glow"
+                      >
+                        <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
+                        KAYIT EKLE
+                      </button>
+                    </div>
+                  </header>
+
+                  {/* Filters */}
+                  <div className="card-glass rounded-[2.5rem] p-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="relative">
+                        <input
+                          type="date"
+                          value={accountFilterStart}
+                          onChange={(e) => setAccountFilterStart(e.target.value)}
+                          className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
+                        />
+                        <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          Başlangıç Tarihi
+                        </label>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="date"
+                          value={accountFilterEnd}
+                          onChange={(e) => setAccountFilterEnd(e.target.value)}
+                          className="peer w-full p-4 pt-6 bg-white/70 border border-slate-200/70 rounded-3xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-500 font-black text-slate-700"
+                        />
+                        <label className="pointer-events-none absolute left-5 top-3 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                          Bitiş Tarihi
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Summary Cards */}
+                  {(() => {
+                    const filtered = accountEntries.filter(e => e.date >= accountFilterStart && e.date <= accountFilterEnd);
+                    const totalCash = filtered.reduce((sum, e) => sum + (e.cash || 0), 0);
+                    const totalPos = filtered.reduce((sum, e) => sum + (e.pos || 0), 0);
+                    const totalTransfer = filtered.reduce((sum, e) => sum + (e.transfer || 0), 0);
+                    const totalIncome = totalCash + totalPos + totalTransfer;
+                    const totalExpense = filtered.reduce((sum, e) => sum + (e.expenses?.reduce((s, ex) => s + (ex.amount || 0), 0) || 0), 0);
+                    const netBalance = totalIncome - totalExpense;
+
+                    return (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="card-glass p-8 rounded-[2.5rem] bg-emerald-50/50 border-emerald-100">
+                          <div className="text-[10px] font-black uppercase tracking-widest text-emerald-600 mb-2">Toplam Gelir</div>
+                          <div className="text-3xl font-black text-emerald-700 tracking-tight">{formatCurrency(totalIncome)}</div>
+                          <div className="mt-4 flex gap-2 text-[10px] font-bold text-emerald-600/70">
+                            <span>Nakit: {formatCurrency(totalCash)}</span>
+                            <span>•</span>
+                            <span>POS: {formatCurrency(totalPos)}</span>
+                          </div>
+                        </div>
+                        <div className="card-glass p-8 rounded-[2.5rem] bg-rose-50/50 border-rose-100">
+                          <div className="text-[10px] font-black uppercase tracking-widest text-rose-600 mb-2">Toplam Gider</div>
+                          <div className="text-3xl font-black text-rose-700 tracking-tight">{formatCurrency(totalExpense)}</div>
+                        </div>
+                        <div className="card-glass p-8 rounded-[2.5rem] bg-indigo-50/50 border-indigo-100">
+                          <div className="text-[10px] font-black uppercase tracking-widest text-indigo-600 mb-2">Net Kalan</div>
+                          <div className="text-3xl font-black text-indigo-700 tracking-tight">{formatCurrency(netBalance)}</div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="space-y-4">
+                    {accountEntries
+                      .filter(e => e.date >= accountFilterStart && e.date <= accountFilterEnd)
+                      .sort((a, b) => b.date.localeCompare(a.date)) // Sort date desc
+                      .map(entry => {
+                        const dailyIncome = (entry.cash || 0) + (entry.pos || 0) + (entry.transfer || 0);
+                        const dailyExpense = (entry.expenses || []).reduce((sum, ex) => sum + (ex.amount || 0), 0);
+                        const dailyNet = dailyIncome - dailyExpense;
+
+                        return (
+                          <div
+                            key={entry.id}
+                            onClick={() => openAccountDetailModal(entry)}
+                            className="group relative overflow-hidden flex flex-col gap-6 p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow cursor-pointer"
+                          >
+                            {/* Date Header */}
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-4">
+                                <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl font-black">
+                                  📅
+                                </div>
+                                <div>
+                                  <div className="text-xl font-black text-slate-800">{formatDateDisplay(entry.date)}</div>
+                                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                    Ekleyen: {users.find(u => u.id === entry.createdByUserId)?.name || 'Bilinmiyor'}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-2xl font-black text-indigo-600">{formatCurrency(dailyNet)}</div>
+                                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Günlük Net</div>
+                              </div>
+                            </div>
+
+                            {/* Details Grid */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 rounded-3xl bg-white/40 border border-slate-200/50">
+                              <div className="space-y-3">
+                                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Gelirler</div>
+                                <div className="flex justify-between items-center text-sm font-bold text-slate-700 border-b border-slate-100 pb-2">
+                                  <span>Nakit</span>
+                                  <span>{formatCurrency(entry.cash || 0)}</span>
+                                </div>
+                                <div className="flex justify-between items-center text-sm font-bold text-slate-700 border-b border-slate-100 pb-2">
+                                  <span>POS</span>
+                                  <span>{formatCurrency(entry.pos || 0)}</span>
+                                </div>
+                                <div className="flex justify-between items-center text-sm font-bold text-slate-700 pb-2">
+                                  <span>Havale</span>
+                                  <span>{formatCurrency(entry.transfer || 0)}</span>
+                                </div>
+                              </div>
+                              <div className="space-y-3">
+                                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Giderler</div>
+                                {entry.expenses && entry.expenses.length > 0 ? (
+                                  entry.expenses.map((ex, idx) => (
+                                    <div key={idx} className="flex justify-between items-center text-sm font-bold text-slate-700 border-b border-slate-100 pb-2 last:border-0">
+                                      <span>{ex.description}</span>
+                                      <span className="text-rose-600">-{formatCurrency(ex.amount)}</span>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div className="text-sm font-bold text-slate-300 italic">Gider yok</div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Photos & Actions */}
+                            <div className="flex items-center justify-between mt-2">
+                              <div className="flex -space-x-3">
+                                {entry.photos && entry.photos.map((photo, idx) => (
+                                  <img key={idx} src={photo} className="w-10 h-10 rounded-full border-2 border-white object-cover" alt="Proof" />
+                                ))}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={(e) => deleteAccountEntry(entry.id, e)}
+                                  className="p-3 rounded-2xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all z-10"
+                                >
+                                  <TrashIcon className="w-5 h-5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                    {accountEntries.filter(e => e.date >= accountFilterStart && e.date <= accountFilterEnd).length === 0 && (
+                      <div className="text-center py-44 card-glass rounded-[4rem] border-2 border-dashed border-slate-200/70">
+                        <div className="text-8xl mb-8 opacity-60 float-slow">💰</div>
+                        <h3 className="text-3xl font-black text-slate-700 tracking-tighter">KAYIT YOK</h3>
+                        <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                          Seçilen tarih aralığında hesap kaydı bulunamadı.
                         </p>
                       </div>
                     )}
@@ -2740,7 +3001,7 @@ const App: React.FC = () => {
             {/* Mobile Tab Bar (no sidebar) */}
             <div className="lg:hidden fixed bottom-0 left-0 right-0 z-50 px-4 pb-4">
               <div className="tabbar rounded-[2.25rem] px-4 py-3">
-                <div className="grid grid-cols-5 items-center">
+                <div className="grid grid-cols-4 items-center">
                   <button
                     onClick={() => setActiveSection('home')}
                     className={`tabbar-item ${activeSection === 'home' ? 'active' : ''} flex flex-col items-center justify-center gap-1 py-2 tap-scale`}
@@ -2759,44 +3020,6 @@ const App: React.FC = () => {
                     <div className={`text-xl ${activeSection === 'tasks' ? 'text-indigo-600' : 'text-slate-500'}`}>📝</div>
                     <div className={`text-[10px] font-black uppercase tracking-widest ${activeSection === 'tasks' ? 'text-indigo-700' : 'text-slate-500'}`}>Görevler</div>
                   </button>
-
-                  {/* Context FAB */}
-                  <div className="relative flex items-center justify-center">
-                    <button
-                      onClick={() => {
-                        if (activeSection === 'rentals') {
-                          setIsRentalModalOpen(true);
-                          return;
-                        }
-                        if (activeSection === 'assets') {
-                          setIsAssetModalOpen(true);
-                          return;
-                        }
-                        if (activeSection === 'tasks') {
-                          openCreateTaskModal(activeCategoryId);
-                          return;
-                        }
-                        // home
-                        if (!activeCategoryId && categories.length) {
-                          setActiveSection('tasks');
-                          setActiveCategoryId(categories[0].id);
-                          openCreateTaskModal(categories[0].id);
-                          return;
-                        }
-                        if (!categories.length) {
-                          setIsCategoryModalOpen(true);
-                          return;
-                        }
-                        setActiveSection('tasks');
-                        openCreateTaskModal(activeCategoryId || categories[0]?.id || null);
-                      }}
-                      className="relative fab fab-pulse w-14 h-14 rounded-full flex items-center justify-center text-white font-black text-2xl -mt-8 shadow-xl"
-                      aria-label="Add"
-                      title="Ekle"
-                    >
-                      +
-                    </button>
-                  </div>
 
                   <button
                     onClick={() => setActiveSection('rentals')}
@@ -2817,963 +3040,1816 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      </div>
+        </div >
+      </div >
 
       {/* Category Create Modal */}
-      {isCategoryModalOpen && (
-        <div className="fixed inset-0 modal-overlay z-[160] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
-          <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
-            <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">
-              {editingCategoryId ? 'Kategoriyi Düzenle' : 'Yeni Kategori'}
-            </h3>
-            <div className="space-y-10">
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Kategori Adı</label>
-                <input
-                  type="text"
-                  autoFocus
-                  value={newCategoryName}
-                  onChange={(e) => setNewCategoryName(e.target.value)}
-                  placeholder="Örn: Mutfak İşleri"
-                  className="w-full p-6 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-2xl transition-all shadow-inner"
-                />
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">İkon</label>
-                <div className="grid grid-cols-5 gap-4">
-                  {CATEGORY_ICONS.map(i => (
-                    <button
-                      key={i}
-                      onClick={() => setNewCategoryIcon(i)}
-                      className={`text-4xl p-4 rounded-3xl border-2 transition-all duration-300 ${newCategoryIcon === i ? 'border-indigo-500 bg-indigo-50 scale-110 shadow-xl shadow-indigo-100' : 'border-slate-50 hover:bg-slate-50'}`}
-                    >
-                      {i}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Renk</label>
-                <div className="grid grid-cols-4 gap-4">
-                  {CATEGORY_COLORS.map(color => (
-                    <button
-                      key={color}
-                      onClick={() => setNewCategoryColor(color)}
-                      className={`h-12 rounded-2xl transition-all duration-300 ${color} ${newCategoryColor === color ? 'ring-8 ring-offset-4 ring-indigo-500/20 scale-105' : 'hover:scale-105'}`}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex gap-6 pt-6">
-                <button onClick={() => setIsCategoryModalOpen(false)} className="flex-1 py-6 font-black text-slate-400 hover:text-slate-600 transition-colors uppercase text-[10px] tracking-widest">Vazgeç</button>
-                <button
-                  onClick={handleSaveCategory}
-                  className="flex-[2] py-6 bg-indigo-600 text-white rounded-[2rem] font-black shadow-2xl hover:bg-indigo-700 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
-                >
-                  {editingCategoryId ? 'Kaydet' : 'Kategori Oluştur'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Rental Create Modal */}
-      {isRentalModalOpen && (
-        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
-          <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
-            <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">Yeni Kira</h3>
-            <div className="space-y-8">
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Daire Numarası</label>
-                <input
-                  type="text"
-                  value={newRentalUnit}
-                  onChange={(e) => setNewRentalUnit(e.target.value)}
-                  placeholder="Örn: 5B"
-                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">İsim Soyisim</label>
-                <input
-                  type="text"
-                  value={newRentalName}
-                  onChange={(e) => setNewRentalName(e.target.value)}
-                  placeholder="Örn: Ahmet Yılmaz"
-                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-6">
+      {
+        isCategoryModalOpen && (
+          <div className="fixed inset-0 modal-overlay z-[160] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">
+                {editingCategoryId ? 'Kategoriyi Düzenle' : 'Yeni Kategori'}
+              </h3>
+              <div className="space-y-10">
                 <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Kira Günü</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="31"
-                    value={newRentalDueDay}
-                    onChange={(e) => setNewRentalDueDay(e.target.value)}
-                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Kira Tutarı</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Kategori Adı</label>
                   <input
                     type="text"
-                    value={newRentalAmount}
-                    onChange={(e) => setNewRentalAmount(e.target.value)}
-                    placeholder="Örn: 9500"
+                    autoFocus
+                    value={newCategoryName}
+                    onChange={(e) => setNewCategoryName(e.target.value)}
+                    placeholder="Örn: Mutfak İşleri"
+                    className="w-full p-6 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-2xl transition-all shadow-inner"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">İkon</label>
+                  <div className="grid grid-cols-5 gap-4">
+                    {CATEGORY_ICONS.map(i => (
+                      <button
+                        key={i}
+                        onClick={() => setNewCategoryIcon(i)}
+                        className={`text-4xl p-4 rounded-3xl border-2 transition-all duration-300 ${newCategoryIcon === i ? 'border-indigo-500 bg-indigo-50 scale-110 shadow-xl shadow-indigo-100' : 'border-slate-50 hover:bg-slate-50'}`}
+                      >
+                        {i}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Renk</label>
+                  <div className="grid grid-cols-4 gap-4">
+                    {CATEGORY_COLORS.map(color => (
+                      <button
+                        key={color}
+                        onClick={() => setNewCategoryColor(color)}
+                        className={`h-12 rounded-2xl transition-all duration-300 ${color} ${newCategoryColor === color ? 'ring-8 ring-offset-4 ring-indigo-500/20 scale-105' : 'hover:scale-105'}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex gap-6 pt-6">
+                  <button onClick={() => setIsCategoryModalOpen(false)} className="flex-1 py-6 font-black text-slate-400 hover:text-slate-600 transition-colors uppercase text-[10px] tracking-widest">Vazgeç</button>
+                  <button
+                    onClick={handleSaveCategory}
+                    className="flex-[2] py-6 bg-indigo-600 text-white rounded-[2rem] font-black shadow-2xl hover:bg-indigo-700 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
+                  >
+                    {editingCategoryId ? 'Kaydet' : 'Kategori Oluştur'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Rental Create Modal */}
+      {/* Rental Create Modal */}
+      {
+        isRentalModalOpen && (
+          <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">Yeni Kira</h3>
+              <div className="space-y-8">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Daire Numarası</label>
+                  <input
+                    type="text"
+                    value={newRentalUnit}
+                    onChange={(e) => setNewRentalUnit(e.target.value)}
+                    placeholder="Örn: 5B"
                     className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
                   />
                 </div>
-              </div>
-              <div className="flex gap-6 pt-2">
-                <button
-                  onClick={() => setIsRentalModalOpen(false)}
-                  className="flex-1 py-5 font-black text-slate-400 hover:text-slate-600 transition-colors uppercase text-[10px] tracking-widest"
-                >
-                  Vazgeç
-                </button>
-                <button
-                  onClick={handleAddRental}
-                  className="flex-[2] py-5 bg-emerald-500 text-white rounded-[2rem] font-black shadow-2xl hover:bg-emerald-600 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
-                >
-                  Kira Kaydet
-                </button>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">İsim Soyisim</label>
+                  <input
+                    type="text"
+                    value={newRentalName}
+                    onChange={(e) => setNewRentalName(e.target.value)}
+                    placeholder="Örn: Ahmet Yılmaz"
+                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-6">
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Kira Günü</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="31"
+                      value={newRentalDueDay}
+                      onChange={(e) => setNewRentalDueDay(e.target.value)}
+                      className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Kira Tutarı</label>
+                    <input
+                      type="text"
+                      value={newRentalAmount}
+                      onChange={(e) => setNewRentalAmount(e.target.value)}
+                      placeholder="Örn: 9500"
+                      className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-6 pt-2">
+                  <button
+                    onClick={() => setIsRentalModalOpen(false)}
+                    className="flex-1 py-5 font-black text-slate-400 hover:text-slate-600 transition-colors uppercase text-[10px] tracking-widest"
+                  >
+                    Vazgeç
+                  </button>
+                  <button
+                    onClick={handleAddRental}
+                    className="flex-[2] py-5 bg-emerald-500 text-white rounded-[2rem] font-black shadow-2xl hover:bg-emerald-600 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
+                  >
+                    Kira Kaydet
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* Asset Create Modal */}
-      {isAssetModalOpen && (
-        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
-          <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
-            <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">Yeni Stok</h3>
+      {
+        isAssetModalOpen && (
+          <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">Yeni Stok</h3>
+              <div className="space-y-8">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Ürün Adı</label>
+                  <input
+                    type="text"
+                    value={newAssetName}
+                    onChange={(e) => setNewAssetName(e.target.value)}
+                    placeholder="Örn: Televizyon"
+                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Hangi Oda</label>
+                  <input
+                    type="text"
+                    value={newAssetRoom}
+                    onChange={(e) => setNewAssetRoom(e.target.value)}
+                    placeholder="Örn: Salon"
+                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Ne Zaman Verildi</label>
+                  <input
+                    type="date"
+                    value={newAssetDate}
+                    onChange={(e) => setNewAssetDate(e.target.value)}
+                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Açıklama</label>
+                  <textarea
+                    value={newAssetNote}
+                    onChange={(e) => setNewAssetNote(e.target.value)}
+                    placeholder="Ek notlar..."
+                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600 min-h-[120px]"
+                  />
+                </div>
+                <div className="flex gap-6 pt-2">
+                  <button
+                    onClick={() => setIsAssetModalOpen(false)}
+                    className="flex-1 py-5 font-black text-slate-400 hover:text-slate-600 transition-colors uppercase text-[10px] tracking-widest"
+                  >
+                    Vazgeç
+                  </button>
+                  <button
+                    onClick={handleAddAsset}
+                    className="flex-[2] py-5 bg-sky-500 text-white rounded-[2rem] font-black shadow-2xl hover:bg-sky-600 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
+                  >
+                    Stok Kaydet
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+      {/* Account Modal */}
+      {isAccountModalOpen && (
+        <div className="fixed inset-0 modal-overlay z-[160] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+            <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">
+              {activeAccountEntryId ? 'Kayıt Düzenle' : 'Yeni Kayıt'}
+            </h3>
+
             <div className="space-y-8">
               <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Ürün Adı</label>
-                <input
-                  type="text"
-                  value={newAssetName}
-                  onChange={(e) => setNewAssetName(e.target.value)}
-                  placeholder="Örn: Televizyon"
-                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Hangi Oda</label>
-                <input
-                  type="text"
-                  value={newAssetRoom}
-                  onChange={(e) => setNewAssetRoom(e.target.value)}
-                  placeholder="Örn: Salon"
-                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
-                />
-              </div>
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Ne Zaman Verildi</label>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Tarih</label>
                 <input
                   type="date"
-                  value={newAssetDate}
-                  onChange={(e) => setNewAssetDate(e.target.value)}
-                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600"
+                  value={accountDate}
+                  onChange={(e) => setAccountDate(e.target.value)}
+                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
                 />
               </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Nakit Gelir</label>
+                  <input
+                    type="number"
+                    value={accountCash}
+                    onChange={(e) => setAccountCash(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-black text-emerald-600 text-lg"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">POS Gelir</label>
+                  <input
+                    type="number"
+                    value={accountPos}
+                    onChange={(e) => setAccountPos(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-black text-emerald-600 text-lg"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Havale Gelir</label>
+                  <input
+                    type="number"
+                    value={accountTransfer}
+                    onChange={(e) => setAccountTransfer(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-black text-emerald-600 text-lg"
+                  />
+                </div>
+              </div>
+
               <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Açıklama</label>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Giderler</label>
+                <div className="space-y-3 mb-4">
+                  {accountExpenses.map((expense, idx) => (
+                    <div key={idx} className="flex gap-2 items-center">
+                      <div className="flex-1 p-3 bg-rose-50 border border-rose-100 rounded-xl text-rose-800 font-bold text-sm">
+                        {expense.description}
+                      </div>
+                      <div className="w-24 p-3 bg-rose-50 border border-rose-100 rounded-xl text-rose-800 font-black text-sm text-right">
+                        -{expense.amount}
+                      </div>
+                      <button
+                        onClick={() => setAccountExpenses(prev => prev.filter((_, i) => i !== idx))}
+                        className="p-3 rounded-xl bg-slate-100 text-slate-400 hover:text-rose-600 hover:bg-rose-100"
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    id="new-expense-desc"
+                    type="text"
+                    placeholder="Gider Açıklaması"
+                    className="flex-1 p-3 bg-white border border-slate-200 rounded-xl outline-none focus:border-rose-400 text-sm font-bold"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const descInput = document.getElementById('new-expense-desc') as HTMLInputElement;
+                        const amountInput = document.getElementById('new-expense-amount') as HTMLInputElement;
+                        const desc = descInput.value.trim();
+                        const amount = parseFloat(amountInput.value);
+                        if (desc && amount > 0) {
+                          setAccountExpenses(prev => [...prev, { id: Date.now().toString(), description: desc, amount }]);
+                          descInput.value = '';
+                          amountInput.value = '';
+                          descInput.focus();
+                        }
+                      }
+                    }}
+                  />
+                  <input
+                    id="new-expense-amount"
+                    type="number"
+                    placeholder="Tutar"
+                    className="w-24 p-3 bg-white border border-slate-200 rounded-xl outline-none focus:border-rose-400 text-sm font-bold"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const descInput = document.getElementById('new-expense-desc') as HTMLInputElement;
+                        const amountInput = document.getElementById('new-expense-amount') as HTMLInputElement;
+                        const desc = descInput.value.trim();
+                        const amount = parseFloat(amountInput.value);
+                        if (desc && amount > 0) {
+                          setAccountExpenses(prev => [...prev, { id: Date.now().toString(), description: desc, amount }]);
+                          descInput.value = '';
+                          amountInput.value = '';
+                          descInput.focus();
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      const descInput = document.getElementById('new-expense-desc') as HTMLInputElement;
+                      const amountInput = document.getElementById('new-expense-amount') as HTMLInputElement;
+                      const desc = descInput.value.trim();
+                      const amount = parseFloat(amountInput.value);
+                      if (desc && amount > 0) {
+                        setAccountExpenses(prev => [...prev, { id: Date.now().toString(), description: desc, amount }]);
+                        descInput.value = '';
+                        amountInput.value = '';
+                        descInput.focus();
+                      }
+                    }}
+                    className="px-4 py-2 bg-rose-500 text-white rounded-xl font-black text-sm hover:bg-rose-600"
+                  >
+                    EKLE
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Fotoğraf Ekle (Max 2)</label>
+                <div className="flex gap-4">
+                  {accountPhotos.map((photo, idx) => (
+                    <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border-2 border-slate-200 group">
+                      <img src={photo} className="w-full h-full object-cover" alt="Proof" />
+                      <button
+                        onClick={() => setAccountPhotos(prev => prev.filter((_, i) => i !== idx))}
+                        className="absolute inset-0 bg-black/50 hidden group-hover:flex items-center justify-center text-white"
+                      >
+                        <TrashIcon className="w-6 h-6" />
+                      </button>
+                    </div>
+                  ))}
+                  {accountPhotos.length < 2 && (
+                    <label className="w-24 h-24 rounded-2xl border-2 border-dashed border-slate-300 flex flex-col items-center justify-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-colors">
+                      <PlusIcon className="w-6 h-6 text-slate-400" />
+                      <input type="file" accept="image/*" className="hidden" onChange={handleAccountPhotoUpload} />
+                    </label>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Not</label>
                 <textarea
-                  value={newAssetNote}
-                  onChange={(e) => setNewAssetNote(e.target.value)}
-                  placeholder="Ek notlar..."
-                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-sky-500/10 focus:border-sky-600 font-bold text-slate-600 min-h-[120px]"
+                  value={accountNote}
+                  onChange={(e) => setAccountNote(e.target.value)}
+                  className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600 text-sm h-24 resize-none"
+                  placeholder="İsteğe bağlı not..."
                 />
               </div>
-              <div className="flex gap-6 pt-2">
+
+              <div className="pt-6 border-t border-slate-100 flex gap-4">
                 <button
-                  onClick={() => setIsAssetModalOpen(false)}
-                  className="flex-1 py-5 font-black text-slate-400 hover:text-slate-600 transition-colors uppercase text-[10px] tracking-widest"
+                  onClick={() => setIsAccountModalOpen(false)}
+                  className="w-1/3 py-4 rounded-[1.5rem] bg-slate-100 text-slate-500 font-black uppercase tracking-wider hover:bg-slate-200 transition-colors"
                 >
-                  Vazgeç
+                  İptal
                 </button>
                 <button
-                  onClick={handleAddAsset}
-                  className="flex-[2] py-5 bg-sky-500 text-white rounded-[2rem] font-black shadow-2xl hover:bg-sky-600 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
+                  onClick={handleAddAccountEntry}
+                  className="flex-1 py-4 bg-gray-900 text-white rounded-[1.5rem] font-black shadow-xl hover:bg-gray-800 transition-all uppercase tracking-widest"
                 >
-                  Stok Kaydet
+                  {activeAccountEntryId ? 'GÜNCELLE' : 'KAYDET'}
                 </button>
               </div>
             </div>
           </div>
         </div>
       )}
-
       {/* Task Create Modal */}
-      {isTaskModalOpen && (
-        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
-          <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-12">
-              <h3 className="text-4xl font-black tracking-tighter text-slate-800">
-                {editingTaskId ? 'Görevi Düzenle' : 'Yeni Görev'}
-              </h3>
-            </div>
+      {
+        isTaskModalOpen && (
+          <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-12">
+                <h3 className="text-4xl font-black tracking-tighter text-slate-800">
+                  {editingTaskId ? 'Görevi Düzenle' : 'Yeni Görev'}
+                </h3>
+              </div>
 
-            <div className="space-y-10">
-              {/* Category picker + manage */}
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Kategori Seç</label>
+              <div className="space-y-10">
+                {/* Category picker + manage */}
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Kategori Seç</label>
+                    <button
+                      type="button"
+                      onClick={openCreateCategoryModal}
+                      className="text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-full bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white tap-scale"
+                    >
+                      + Kategori
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
+                    {categories.map((cat) => {
+                      const isSelected = (selectedTaskCategoryId || activeCategoryId) === cat.id;
+                      return (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedTaskCategoryId(cat.id);
+                            setActiveCategoryId(cat.id);
+                          }}
+                          className={`relative overflow-hidden aspect-square rounded-3xl border transition-all tap-scale hover-glow ${isSelected ? 'active-pill border-indigo-200' : 'bg-white/70 border-slate-200/70'
+                            }`}
+                          title={cat.name}
+                        >
+                          <div className={`absolute inset-0 ${cat.color} opacity-10`} />
+                          <div className="absolute left-0 top-0 bottom-0 w-2 opacity-60" />
+
+                          <div className="relative h-full w-full p-3 flex flex-col items-center justify-center gap-1">
+                            <div className="text-[22px] leading-none">{cat.icon}</div>
+                            <div className="w-full text-[9px] font-black uppercase tracking-widest text-slate-700 text-center truncate whitespace-nowrap">
+                              {cat.name}
+                            </div>
+                          </div>
+
+                          {/* edit/delete controls */}
+                          <div className="absolute top-2 right-2 flex gap-1 opacity-0 hover:opacity-100 md:group-hover:opacity-100">
+                            <span className="sr-only">Kategori işlemleri</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); openEditCategoryModal(cat.id); }}
+                            className="absolute top-2 left-2 w-8 h-8 rounded-2xl bg-white/80 border border-slate-200/70 text-slate-700 hover:bg-white transition-all"
+                            title="Düzenle"
+                          >
+                            ✎
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); deleteCategoryById(cat.id); }}
+                            className="absolute top-2 right-2 w-8 h-8 rounded-2xl bg-white/80 border border-slate-200/70 text-rose-600 hover:bg-rose-50 transition-all"
+                            title="Sil"
+                          >
+                            🗑
+                          </button>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Görev Nedir?</label>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                    placeholder="Yapılacak işi yazın..."
+                    className="w-full p-8 bg-slate-50 border border-slate-100 rounded-[2.5rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-black text-3xl transition-all shadow-inner"
+                    onKeyDown={e => e.key === 'Enter' && handleAddTask()}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Görevi Kim Ekledi</label>
+                    <div className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-600">
+                      {currentUser?.name || 'Bilinmiyor'}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Görevi Kim Yapacak</label>
+                    <select
+                      value={newTaskAssigneeId}
+                      onChange={(e) => setNewTaskAssigneeId(e.target.value)}
+                      className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                    >
+                      {users.map(user => (
+                        <option key={user.id} value={user.id}>
+                          {user.name} {user.role === 'admin' ? '(Admin)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Beklenen Süre</label>
+                    <input
+                      type="time"
+                      value={newTaskExpectedDuration}
+                      onChange={(e) => setNewTaskExpectedDuration(e.target.value)}
+                      step="60"
+                      className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Tekrar</label>
+                    <select
+                      value={newTaskRepeat}
+                      onChange={(e) => setNewTaskRepeat(e.target.value as 'once' | 'daily')}
+                      className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                    >
+                      <option value="once">Tek Seferlik</option>
+                      <option value="daily">Her Gün</option>
+                    </select>
+                  </div>
+                  {!isAuditCategory && (
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Fotoğraf Gerekli mi?</label>
+                      <button
+                        type="button"
+                        onClick={() => setNewTaskRequiresPhoto(prev => !prev)}
+                        className={`w-full p-5 rounded-2xl font-black uppercase tracking-widest text-xs transition-all ${newTaskRequiresPhoto ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                      >
+                        {newTaskRequiresPhoto ? 'Evet, fotoğraf zorunlu' : 'Hayır, gerekmez'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Scheduling Section */}
+                <div className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] space-y-4">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-3 text-sm font-black text-slate-600 uppercase tracking-widest cursor-pointer">
+                      <span className="text-xl">📅</span>
+                      <span>İleri Tarihli Planla</span>
+                    </label>
+                    <div className="relative inline-block w-12 h-6 transition duration-200 ease-in-out">
+                      <input
+                        type="checkbox"
+                        id="schedule-toggle"
+                        className="peer absolute opacity-0 w-0 h-0"
+                        checked={newTaskScheduled}
+                        onChange={(e) => setNewTaskScheduled(e.target.checked)}
+                      />
+                      <label
+                        htmlFor="schedule-toggle"
+                        className={`block overflow-hidden h-6 rounded-full cursor-pointer transition-colors duration-200 ${newTaskScheduled ? 'bg-indigo-500' : 'bg-slate-300'}`}
+                      ></label>
+                      <div className={`absolute left-1 bottom-1 bg-white w-4 h-4 rounded-full transition-transform duration-200 ${newTaskScheduled ? 'translate-x-6' : 'translate-x-0'}`}></div>
+                    </div>
+                  </div>
+
+                  {newTaskScheduled && (
+                    <div className="grid grid-cols-2 gap-4 animate-fade-in">
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Tarih</label>
+                        <input
+                          type="date"
+                          value={newTaskScheduleDate}
+                          onChange={(e) => setNewTaskScheduleDate(e.target.value)}
+                          className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 font-bold text-slate-700"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Başlangıç Saati</label>
+                        <input
+                          type="time"
+                          value={newTaskScheduleTime}
+                          onChange={(e) => setNewTaskScheduleTime(e.target.value)}
+                          className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 font-bold text-slate-700"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Reminder Settings */}
+                <div className="p-6 bg-amber-50 border border-amber-100/50 rounded-[2rem] space-y-4">
+                  <h4 className="flex items-center gap-2 text-sm font-black text-amber-700 uppercase tracking-widest">
+                    <span className="text-xl">⏰</span> Hatırlatma Ayarları
+                  </h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] font-black text-amber-600/60 uppercase tracking-widest mb-2 block">İlk Hatırlatma</label>
+                      <input
+                        type="time"
+                        value={newTaskReminderStartTime}
+                        onChange={(e) => setNewTaskReminderStartTime(e.target.value)}
+                        className="w-full p-4 bg-white border border-amber-200 rounded-2xl outline-none focus:ring-4 focus:ring-amber-500/10 font-bold text-slate-700"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-amber-600/60 uppercase tracking-widest mb-2 block">Tekrar Sıklığı (Dk)</label>
+                      <input
+                        type="number"
+                        placeholder="Örn: 30"
+                        value={newTaskReminderInterval}
+                        onChange={(e) => setNewTaskReminderInterval(e.target.value ? Number(e.target.value) : '')}
+                        className="w-full p-4 bg-white border border-amber-200 rounded-2xl outline-none focus:ring-4 focus:ring-amber-500/10 font-bold text-slate-700"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-amber-600/70 px-2 leading-relaxed">
+                    * Görev tamamlanana kadar belirlenen aralıklarla bildirim gönderilir.
+                  </p>
+                </div>
+
+                {isAuditCategory && (
+                  <div className="space-y-5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Denetim Seçenekleri</label>
+                      <button
+                        type="button"
+                        onClick={toggleSelectAllAudit}
+                        className="text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all"
+                      >
+                        {selectedAuditOptions.length === auditOptions.length && auditOptions.length > 0 ? 'Tümünü Kaldır' : 'Tümünü Seç'}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {auditOptions.map(option => (
+                        <div key={option} className="flex items-center justify-between p-4 bg-slate-50 border border-slate-100 rounded-2xl">
+                          <label className="flex items-center gap-3 font-bold text-slate-600">
+                            <input
+                              type="checkbox"
+                              checked={selectedAuditOptions.includes(option)}
+                              onChange={() => toggleAuditOption(option)}
+                            />
+                            {option}
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => removeAuditOption(option)}
+                            className="text-xs font-black uppercase tracking-widest text-rose-500 hover:text-rose-600"
+                          >
+                            Sil
+                          </button>
+                        </div>
+                      ))}
+                      {auditOptions.length === 0 && (
+                        <div className="p-4 bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-slate-400 text-sm font-bold">
+                          Henüz denetim seçeneği yok. Aşağıdan ekleyin.
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-3">
+                      <input
+                        type="text"
+                        value={newAuditOption}
+                        onChange={(e) => setNewAuditOption(e.target.value)}
+                        placeholder="Örn: Televizyon üstü"
+                        className="flex-1 p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddAuditOption}
+                        className="px-6 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-indigo-700 active:scale-95 transition-all"
+                      >
+                        Ekle
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-6 pt-6">
                   <button
-                    type="button"
-                    onClick={openCreateCategoryModal}
-                    className="text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-full bg-white/70 border border-slate-200/70 text-slate-600 hover:bg-white tap-scale"
+                    onClick={() => {
+                      setIsTaskModalOpen(false);
+                      setEditingTaskId(null);
+                      resetTaskModalState();
+                    }}
+                    className="flex-1 py-6 font-black text-slate-400 hover:text-slate-600 uppercase text-[10px] tracking-widest"
                   >
-                    + Kategori
+                    Vazgeç
+                  </button>
+                  <button
+                    onClick={() => handleAddTask()}
+                    className="flex-[2] py-6 bg-slate-900 text-white rounded-[2.5rem] font-black shadow-2xl hover:bg-slate-800 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
+                  >
+                    {editingTaskId ? 'Kaydet' : 'Listeye Ekle'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* User Management Modal */}
+      {
+        isUserModalOpen && (
+          <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center gap-4 mb-10">
+                <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-indigo-100 text-indigo-600 text-3xl">
+                  👥
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-4xl font-black tracking-tighter text-slate-800">Kullanıcı Yönetimi</h3>
+                  <p className="text-slate-400 font-bold text-sm mt-1">
+                    {currentUser?.role === 'admin' ? 'Admin yetkisi aktif' : 'Sadece admin düzenleyebilir'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-8">
+                <div>
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Mevcut Kullanıcılar</p>
+                  <div className="space-y-3">
+                    {users.map(user => (
+                      <div key={user.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                        <div className="flex flex-col">
+                          <span className="font-black text-slate-700">{user.name} {user.role === 'admin' ? '(Admin)' : ''}</span>
+                          <span className="text-xs font-bold text-slate-400">
+                            @{user.username} · {user.phoneNumber || 'Telefon yok'}
+                          </span>
+                        </div>
+                        {currentUser?.role === 'admin' && (
+                          <button
+                            onClick={() => handleDeleteUser(user.id)}
+                            className="px-4 py-2 text-xs font-black uppercase tracking-widest rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all"
+                          >
+                            Sil
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {currentUser?.role === 'admin' && (
+                  <div className="border-t border-slate-100 pt-8 space-y-6">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Yeni Kullanıcı Ekle</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <input
+                        type="text"
+                        value={newUserName}
+                        onChange={(e) => setNewUserName(e.target.value)}
+                        placeholder="İsim"
+                        className="p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                      />
+                      <input
+                        type="text"
+                        value={newUserUsername}
+                        onChange={(e) => setNewUserUsername(e.target.value)}
+                        placeholder="Kullanıcı adı"
+                        className="p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                      />
+                      <input
+                        type="password"
+                        value={newUserPassword}
+                        onChange={(e) => setNewUserPassword(e.target.value)}
+                        placeholder="Şifre"
+                        className="p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                      />
+                      <input
+                        type="text"
+                        value={newUserPhone}
+                        onChange={(e) => setNewUserPhone(e.target.value)}
+                        placeholder="Telefon (WhatsApp)"
+                        className="p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                      />
+                      <select
+                        value={newUserRole}
+                        onChange={(e) => setNewUserRole(e.target.value as 'admin' | 'user')}
+                        className="p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                      >
+                        <option value="user">Kullanıcı</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                      <button
+                        onClick={handleAddUser}
+                        className="p-4 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-indigo-700 active:scale-95 transition-all"
+                      >
+                        Kullanıcı Ekle
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-center pt-8 border-t border-slate-100 mt-8">
+                <button
+                  onClick={() => setIsUserModalOpen(false)}
+                  className="px-12 py-6 font-black text-slate-600 hover:text-slate-800 uppercase text-xs tracking-widest transition-colors"
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* WhatsApp Settings Modal */}
+      {
+        isWhatsAppModalOpen && (
+          <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center gap-4 mb-10">
+                <div className={`w-16 h-16 rounded-[2rem] flex items-center justify-center ${whatsAppReady ? 'bg-emerald-100' : 'bg-slate-100'}`}>
+                  <svg className={`w-10 h-10 ${whatsAppReady ? 'text-emerald-600' : 'text-slate-400'}`} fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-4xl font-black tracking-tighter text-slate-800">WhatsApp Bildirimleri</h3>
+                  <p className="text-slate-400 font-bold text-sm mt-1">
+                    {whatsAppReady ? '✅ Bağlı ve Hazır' : whatsAppEnabled ? '⏳ Bağlanıyor...' : '❌ Bağlı Değil'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-8">
+                {/* Telefon Numaraları */}
+                <div className="space-y-4">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">
+                    Bildirim Gönderilecek Numaralar
+                  </label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <input
+                      type="text"
+                      value={phoneNumber}
+                      onChange={(e) => setPhoneNumber(e.target.value)}
+                      placeholder="Ana numara"
+                      className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-xl transition-all shadow-inner"
+                    />
+                    <input
+                      type="text"
+                      value={secondPhoneNumber}
+                      onChange={(e) => setSecondPhoneNumber(e.target.value)}
+                      placeholder="2. numara (opsiyonel)"
+                      className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-xl transition-all shadow-inner"
+                    />
+                  </div>
+                  <button
+                    onClick={handlePhoneNumberSave}
+                    className="px-8 py-6 bg-indigo-600 text-white rounded-[2rem] font-black hover:bg-indigo-700 active:scale-95 transition-all shadow-lg text-sm"
+                  >
+                    Kaydet
+                  </button>
+                  <p className="text-xs text-slate-400 mt-3 px-2">
+                    📱 Tamamlanan görevler bu numaralara bildirim olarak gönderilecek
+                  </p>
+                </div>
+
+                {/* Bağlantı Durumu */}
+                <div className="border-t border-slate-100 pt-8">
+                  {!whatsAppEnabled ? (
+                    <div className="text-center py-8">
+                      <div className="text-6xl mb-6">📱</div>
+                      <p className="text-slate-600 font-bold mb-8">
+                        WhatsApp hesabınızı bağlayarak görev tamamlama bildirimlerini alabilirsiniz
+                      </p>
+                      <button
+                        onClick={handleWhatsAppInitialize}
+                        className="px-12 py-6 bg-emerald-600 text-white rounded-[2rem] font-black shadow-2xl hover:bg-emerald-700 active:scale-95 transition-all uppercase text-sm tracking-widest"
+                      >
+                        WhatsApp'ı Başlat
+                      </button>
+                    </div>
+                  ) : !whatsAppReady && qrCode ? (
+                    <div className="text-center py-8">
+                      <p className="text-slate-700 font-bold text-lg mb-6">
+                        📲 QR Kodu WhatsApp ile Tarayın
+                      </p>
+                      <div className="flex justify-center mb-6">
+                        <img
+                          src={qrCode}
+                          alt="QR Code"
+                          className="w-64 h-64 border-8 border-slate-100 rounded-[3rem] shadow-2xl"
+                        />
+                      </div>
+                      <p className="text-slate-500 text-sm mb-6">
+                        1. WhatsApp'ı açın<br />
+                        2. Menü &gt; Bağlı Cihazlar &gt; Cihaz Bağla<br />
+                        3. Bu QR kodu telefonunuzla tarayın
+                      </p>
+                      <button
+                        onClick={handleWhatsAppDisconnect}
+                        className="px-8 py-4 bg-rose-100 text-rose-600 rounded-[2rem] font-black hover:bg-rose-200 active:scale-95 transition-all text-sm"
+                      >
+                        İptal Et
+                      </button>
+                    </div>
+                  ) : whatsAppReady ? (
+                    <div className="text-center py-8">
+                      <div className="text-6xl mb-6">✅</div>
+                      <p className="text-emerald-600 font-black text-2xl mb-4">
+                        WhatsApp Bağlı!
+                      </p>
+                      <p className="text-slate-600 font-bold mb-8">
+                        Artık görevlerinizi tamamladığınızda otomatik olarak bildirim alacaksınız
+                      </p>
+                      <button
+                        onClick={handleWhatsAppDisconnect}
+                        className="px-8 py-4 bg-rose-100 text-rose-600 rounded-[2rem] font-black hover:bg-rose-200 active:scale-95 transition-all text-sm"
+                      >
+                        Bağlantıyı Kes
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <div className="text-6xl mb-6 animate-pulse">⏳</div>
+                      <p className="text-slate-600 font-bold">
+                        WhatsApp bağlantısı kuruluyor...
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex justify-center pt-8 border-t border-slate-100 mt-8">
+                <button
+                  onClick={() => setIsWhatsAppModalOpen(false)}
+                  className="px-12 py-6 font-black text-slate-600 hover:text-slate-800 uppercase text-xs tracking-widest transition-colors"
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Audit Task Modal */}
+      {
+        isAuditModalOpen && activeAuditTask && (
+          <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-3xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center gap-4 mb-10">
+                <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-sky-100 text-sky-600 text-3xl">
+                  🧾
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-4xl font-black tracking-tighter text-slate-800">Denetim Görevi</h3>
+                  <p className="text-slate-400 font-bold text-sm mt-1">
+                    {activeAuditTask.title}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-8">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-black text-slate-600 uppercase tracking-widest">
+                    Adım {auditStepIndex + 1} / {activeAuditTask.auditItems?.length || 0}
+                  </p>
+                  <p className="text-xs font-black text-slate-400 uppercase tracking-widest">
+                    {activeAuditTask.auditItems?.[auditStepIndex] || 'Seçenek yok'}
+                  </p>
+                </div>
+
+                <div className="p-8 bg-slate-50 rounded-[2.5rem] border border-slate-100 text-slate-700 text-2xl font-black tracking-tight">
+                  {activeAuditTask.auditItems?.[auditStepIndex] || 'Denetim seçeneği bulunamadı.'}
+                </div>
+
+                <div className="flex items-center gap-6">
+                  <button
+                    onClick={() => handleAuditDecision('pass')}
+                    className="flex-1 py-6 bg-emerald-600 text-white rounded-[2rem] font-black shadow-2xl hover:bg-emerald-700 active:scale-95 transition-all uppercase text-sm tracking-widest"
+                  >
+                    + Uygun
+                  </button>
+                  <button
+                    onClick={() => handleAuditDecision('fail')}
+                    className="flex-1 py-6 bg-rose-600 text-white rounded-[2rem] font-black shadow-2xl hover:bg-rose-700 active:scale-95 transition-all uppercase text-sm tracking-widest"
+                  >
+                    - Uygun Değil
                   </button>
                 </div>
 
-                <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-3">
-                  {categories.map((cat) => {
-                    const isSelected = (selectedTaskCategoryId || activeCategoryId) === cat.id;
-                    return (
-                      <button
-                        key={cat.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedTaskCategoryId(cat.id);
-                          setActiveCategoryId(cat.id);
-                        }}
-                        className={`relative overflow-hidden aspect-square rounded-3xl border transition-all tap-scale hover-glow ${isSelected ? 'active-pill border-indigo-200' : 'bg-white/70 border-slate-200/70'
-                          }`}
-                        title={cat.name}
-                      >
-                        <div className={`absolute inset-0 ${cat.color} opacity-10`} />
-                        <div className="absolute left-0 top-0 bottom-0 w-2 opacity-60" />
-
-                        <div className="relative h-full w-full p-3 flex flex-col items-center justify-center gap-1">
-                          <div className="text-[22px] leading-none">{cat.icon}</div>
-                          <div className="w-full text-[9px] font-black uppercase tracking-widest text-slate-700 text-center truncate whitespace-nowrap">
-                            {cat.name}
-                          </div>
-                        </div>
-
-                        {/* edit/delete controls */}
-                        <div className="absolute top-2 right-2 flex gap-1 opacity-0 hover:opacity-100 md:group-hover:opacity-100">
-                          <span className="sr-only">Kategori işlemleri</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); openEditCategoryModal(cat.id); }}
-                          className="absolute top-2 left-2 w-8 h-8 rounded-2xl bg-white/80 border border-slate-200/70 text-slate-700 hover:bg-white transition-all"
-                          title="Düzenle"
-                        >
-                          ✎
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); deleteCategoryById(cat.id); }}
-                          className="absolute top-2 right-2 w-8 h-8 rounded-2xl bg-white/80 border border-slate-200/70 text-rose-600 hover:bg-rose-50 transition-all"
-                          title="Sil"
-                        >
-                          🗑
-                        </button>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Görev Nedir?</label>
-                <input
-                  type="text"
-                  autoFocus
-                  value={newTaskTitle}
-                  onChange={(e) => setNewTaskTitle(e.target.value)}
-                  placeholder="Yapılacak işi yazın..."
-                  className="w-full p-8 bg-slate-50 border border-slate-100 rounded-[2.5rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-black text-3xl transition-all shadow-inner"
-                  onKeyDown={e => e.key === 'Enter' && handleAddTask()}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Görevi Kim Ekledi</label>
-                  <div className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-600">
-                    {currentUser?.name || 'Bilinmiyor'}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Görevi Kim Yapacak</label>
-                  <select
-                    value={newTaskAssigneeId}
-                    onChange={(e) => setNewTaskAssigneeId(e.target.value)}
-                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
-                  >
-                    {users.map(user => (
-                      <option key={user.id} value={user.id}>
-                        {user.name} {user.role === 'admin' ? '(Admin)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Beklenen Süre</label>
+                <div className="space-y-4">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    Uygun değilse fotoğraf yükleyin
+                  </label>
                   <input
-                    type="time"
-                    value={newTaskExpectedDuration}
-                    onChange={(e) => setNewTaskExpectedDuration(e.target.value)}
-                    step="60"
-                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleAuditPhotoChange}
+                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-600"
                   />
+                  {auditPhotoDataUrl && (
+                    <img
+                      src={auditPhotoDataUrl}
+                      alt="Denetim Fotoğrafı"
+                      className="w-full max-h-80 object-contain rounded-2xl border border-slate-100"
+                    />
+                  )}
                 </div>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Tekrar</label>
-                  <select
-                    value={newTaskRepeat}
-                    onChange={(e) => setNewTaskRepeat(e.target.value as 'once' | 'daily')}
-                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
-                  >
-                    <option value="once">Tek Seferlik</option>
-                    <option value="daily">Her Gün</option>
-                  </select>
+              </div>
+
+              <div className="flex justify-center pt-8 border-t border-slate-100 mt-8">
+                <button
+                  onClick={() => {
+                    setIsAuditModalOpen(false);
+                    setActiveAuditTaskId(null);
+                    setAuditStepIndex(0);
+                    setAuditPhotoDataUrl(null);
+                  }}
+                  className="px-12 py-6 font-black text-slate-600 hover:text-slate-800 uppercase text-xs tracking-widest transition-colors"
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Audit Review Modal */}
+      {
+        isAuditReviewOpen && activeAuditReviewTask && (
+          <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-3xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center gap-4 mb-10">
+                <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-rose-100 text-rose-600 text-3xl">
+                  📷
                 </div>
-                {!isAuditCategory && (
-                  <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Fotoğraf Gerekli mi?</label>
-                    <button
-                      type="button"
-                      onClick={() => setNewTaskRequiresPhoto(prev => !prev)}
-                      className={`w-full p-5 rounded-2xl font-black uppercase tracking-widest text-xs transition-all ${newTaskRequiresPhoto ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
-                    >
-                      {newTaskRequiresPhoto ? 'Evet, fotoğraf zorunlu' : 'Hayır, gerekmez'}
-                    </button>
+                <div className="flex-1">
+                  <h3 className="text-4xl font-black tracking-tighter text-slate-800">Eksik Fotoğrafları</h3>
+                  <p className="text-slate-400 font-bold text-sm mt-1">
+                    {activeAuditReviewTask.title}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                {activeAuditReviewTask.auditResults?.filter(result => result.status === 'fail').map((result, idx) => (
+                  <div key={`${result.item}-${idx}`} className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] space-y-4">
+                    <p className="text-lg font-black text-slate-700">{result.item}</p>
+                    {result.photoDataUrl ? (
+                      <img
+                        src={result.photoDataUrl}
+                        alt={`Eksik fotoğraf - ${result.item}`}
+                        className="w-full max-h-96 object-contain rounded-2xl border border-slate-100"
+                      />
+                    ) : (
+                      <p className="text-sm font-bold text-slate-400">Fotoğraf yok</p>
+                    )}
+                  </div>
+                ))}
+                {(!activeAuditReviewTask.auditResults || activeAuditReviewTask.auditResults.filter(result => result.status === 'fail').length === 0) && (
+                  <div className="p-6 bg-slate-50 border border-dashed border-slate-200 rounded-[2rem] text-slate-400 font-bold text-sm">
+                    Eksik fotoğraf bulunamadı.
                   </div>
                 )}
               </div>
 
-              {isAuditCategory && (
-                <div className="space-y-5">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Denetim Seçenekleri</label>
-                    <button
-                      type="button"
-                      onClick={toggleSelectAllAudit}
-                      className="text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all"
-                    >
-                      {selectedAuditOptions.length === auditOptions.length && auditOptions.length > 0 ? 'Tümünü Kaldır' : 'Tümünü Seç'}
-                    </button>
+              <div className="flex justify-center pt-8 border-t border-slate-100 mt-8">
+                <button
+                  onClick={() => {
+                    setIsAuditReviewOpen(false);
+                    setActiveAuditReviewTaskId(null);
+                  }}
+                  className="px-12 py-6 font-black text-slate-600 hover:text-slate-800 uppercase text-xs tracking-widest transition-colors"
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Account Detail Modal */}
+      {isAccountDetailModalOpen && (() => {
+        const entry = accountEntries.find(e => e.id === activeAccountEntryId);
+        if (!entry) return null;
+        const totalIncome = (entry.cash || 0) + (entry.pos || 0) + (entry.transfer || 0);
+        const totalExpense = (entry.expenses || []).reduce((sum, ex) => sum + (ex.amount || 0), 0);
+        const netBalance = totalIncome - totalExpense;
+
+        return (
+          <div className="fixed inset-0 modal-overlay z-[170] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-3xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center justify-between mb-8">
+                <div>
+                  <div className="text-sm font-black text-slate-400 uppercase tracking-widest mb-1">Hesap Detayı</div>
+                  <h3 className="text-4xl font-black tracking-tighter text-slate-800">{formatDateDisplay(entry.date)}</h3>
+                </div>
+                <button
+                  onClick={() => setIsAccountDetailModalOpen(false)}
+                  className="p-4 bg-slate-100 rounded-2xl text-slate-500 hover:bg-slate-200 transition-colors"
+                >
+                  <span className="text-2xl">✕</span>
+                </button>
+              </div>
+
+              {/* Net Balance Card */}
+              <div className="p-8 rounded-[2.5rem] bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-xl shadow-indigo-200 mb-8 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -mr-10 -mt-10" />
+                <div className="relative z-10">
+                  <div className="text-emerald-200 font-black uppercase tracking-widest text-xs mb-2">Günlük Net Kalan</div>
+                  <div className="text-5xl font-black tracking-tight">{formatCurrency(netBalance)}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                {/* Income Section */}
+                <div className="space-y-4">
+                  <h4 className="text-lg font-black text-emerald-600 flex items-center gap-2">
+                    <span>💰</span> Gelirler
+                  </h4>
+                  <div className="bg-emerald-50/50 p-6 rounded-[2rem] space-y-3 border border-emerald-100">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600 font-bold">Nakit</span>
+                      <span className="font-black text-emerald-700">{formatCurrency(entry.cash || 0)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600 font-bold">POS</span>
+                      <span className="font-black text-emerald-700">{formatCurrency(entry.pos || 0)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-600 font-bold">Havale</span>
+                      <span className="font-black text-emerald-700">{formatCurrency(entry.transfer || 0)}</span>
+                    </div>
+                    <div className="pt-3 border-t border-emerald-200/50 flex justify-between items-center">
+                      <span className="text-emerald-800 font-black uppercase text-xs tracking-widest">Toplam</span>
+                      <span className="font-black text-emerald-800 text-lg">{formatCurrency(totalIncome)}</span>
+                    </div>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {auditOptions.map(option => (
-                      <div key={option} className="flex items-center justify-between p-4 bg-slate-50 border border-slate-100 rounded-2xl">
-                        <label className="flex items-center gap-3 font-bold text-slate-600">
-                          <input
-                            type="checkbox"
-                            checked={selectedAuditOptions.includes(option)}
-                            onChange={() => toggleAuditOption(option)}
-                          />
-                          {option}
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => removeAuditOption(option)}
-                          className="text-xs font-black uppercase tracking-widest text-rose-500 hover:text-rose-600"
-                        >
-                          Sil
-                        </button>
-                      </div>
-                    ))}
-                    {auditOptions.length === 0 && (
-                      <div className="p-4 bg-slate-50 border border-dashed border-slate-200 rounded-2xl text-slate-400 text-sm font-bold">
-                        Henüz denetim seçeneği yok. Aşağıdan ekleyin.
+                </div>
+
+                {/* Expenses Section */}
+                <div className="space-y-4">
+                  <h4 className="text-lg font-black text-rose-600 flex items-center gap-2">
+                    <span>📉</span> Giderler
+                  </h4>
+                  <div className="bg-rose-50/50 p-6 rounded-[2rem] space-y-3 border border-rose-100 min-h-[140px]">
+                    {(entry.expenses || []).length > 0 ? (
+                      (entry.expenses || []).map((ex, idx) => (
+                        <div key={idx} className="flex justify-between items-center border-b border-rose-100/50 last:border-0 pb-2 last:pb-0">
+                          <span className="text-slate-600 font-bold truncate max-w-[150px]">{ex.description}</span>
+                          <span className="font-black text-rose-700">-{ex.amount} ₺</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center text-slate-400 font-bold py-4 text-xs uppercase tracking-widest">Gider Yok</div>
+                    )}
+
+                    {(entry.expenses || []).length > 0 && (
+                      <div className="pt-3 border-t border-rose-200/50 flex justify-between items-center">
+                        <span className="text-rose-800 font-black uppercase text-xs tracking-widest">Toplam</span>
+                        <span className="font-black text-rose-800 text-lg">{formatCurrency(totalExpense)}</span>
                       </div>
                     )}
                   </div>
-                  <div className="flex gap-3">
-                    <input
-                      type="text"
-                      value={newAuditOption}
-                      onChange={(e) => setNewAuditOption(e.target.value)}
-                      placeholder="Örn: Televizyon üstü"
-                      className="flex-1 p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleAddAuditOption}
-                      className="px-6 py-4 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-indigo-700 active:scale-95 transition-all"
-                    >
-                      Ekle
-                    </button>
-                  </div>
                 </div>
-              )}
-
-              <div className="flex gap-6 pt-6">
-                <button
-                  onClick={() => {
-                    setIsTaskModalOpen(false);
-                    setEditingTaskId(null);
-                    resetTaskModalState();
-                  }}
-                  className="flex-1 py-6 font-black text-slate-400 hover:text-slate-600 uppercase text-[10px] tracking-widest"
-                >
-                  Vazgeç
-                </button>
-                <button
-                  onClick={() => handleAddTask()}
-                  className="flex-[2] py-6 bg-slate-900 text-white rounded-[2.5rem] font-black shadow-2xl hover:bg-slate-800 active:scale-95 transition-all uppercase text-[10px] tracking-widest"
-                >
-                  {editingTaskId ? 'Kaydet' : 'Listeye Ekle'}
-                </button>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* User Management Modal */}
-      {isUserModalOpen && (
-        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
-          <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
-            <div className="flex items-center gap-4 mb-10">
-              <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-indigo-100 text-indigo-600 text-3xl">
-                👥
-              </div>
-              <div className="flex-1">
-                <h3 className="text-4xl font-black tracking-tighter text-slate-800">Kullanıcı Yönetimi</h3>
-                <p className="text-slate-400 font-bold text-sm mt-1">
-                  {currentUser?.role === 'admin' ? 'Admin yetkisi aktif' : 'Sadece admin düzenleyebilir'}
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-8">
-              <div>
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Mevcut Kullanıcılar</p>
-                <div className="space-y-3">
-                  {users.map(user => (
-                    <div key={user.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                      <div className="flex flex-col">
-                        <span className="font-black text-slate-700">{user.name} {user.role === 'admin' ? '(Admin)' : ''}</span>
-                        <span className="text-xs font-bold text-slate-400">
-                          @{user.username} · {user.phoneNumber || 'Telefon yok'}
-                        </span>
+              {/* Photos Section */}
+              {entry.photos && entry.photos.length > 0 && (
+                <div className="mb-8 p-6 bg-slate-50 rounded-[2rem] border border-slate-100">
+                  <h4 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-4">Fiş / Fotoğraflar</h4>
+                  <div className="flex gap-4 overflow-x-auto pb-2">
+                    {entry.photos.map((photo, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => setLightboxPhoto(photo)}
+                        className="relative w-32 h-32 rounded-2xl overflow-hidden cursor-zoom-in border-2 border-slate-200 hover:border-indigo-400 transition-all shadow-sm hover:shadow-md"
+                      >
+                        <img src={photo} className="w-full h-full object-cover" alt="Detay" />
                       </div>
-                      {currentUser?.role === 'admin' && (
-                        <button
-                          onClick={() => handleDeleteUser(user.id)}
-                          className="px-4 py-2 text-xs font-black uppercase tracking-widest rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all"
-                        >
-                          Sil
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {currentUser?.role === 'admin' && (
-                <div className="border-t border-slate-100 pt-8 space-y-6">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Yeni Kullanıcı Ekle</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <input
-                      type="text"
-                      value={newUserName}
-                      onChange={(e) => setNewUserName(e.target.value)}
-                      placeholder="İsim"
-                      className="p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
-                    />
-                    <input
-                      type="text"
-                      value={newUserUsername}
-                      onChange={(e) => setNewUserUsername(e.target.value)}
-                      placeholder="Kullanıcı adı"
-                      className="p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
-                    />
-                    <input
-                      type="password"
-                      value={newUserPassword}
-                      onChange={(e) => setNewUserPassword(e.target.value)}
-                      placeholder="Şifre"
-                      className="p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
-                    />
-                    <input
-                      type="text"
-                      value={newUserPhone}
-                      onChange={(e) => setNewUserPhone(e.target.value)}
-                      placeholder="Telefon (WhatsApp)"
-                      className="p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
-                    />
-                    <select
-                      value={newUserRole}
-                      onChange={(e) => setNewUserRole(e.target.value as 'admin' | 'user')}
-                      className="p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
-                    >
-                      <option value="user">Kullanıcı</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                    <button
-                      onClick={handleAddUser}
-                      className="p-4 bg-indigo-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-indigo-700 active:scale-95 transition-all"
-                    >
-                      Kullanıcı Ekle
-                    </button>
+                    ))}
                   </div>
                 </div>
               )}
-            </div>
 
-            <div className="flex justify-center pt-8 border-t border-slate-100 mt-8">
-              <button
-                onClick={() => setIsUserModalOpen(false)}
-                className="px-12 py-6 font-black text-slate-600 hover:text-slate-800 uppercase text-xs tracking-widest transition-colors"
-              >
-                Kapat
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* WhatsApp Settings Modal */}
-      {isWhatsAppModalOpen && (
-        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
-          <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
-            <div className="flex items-center gap-4 mb-10">
-              <div className={`w-16 h-16 rounded-[2rem] flex items-center justify-center ${whatsAppReady ? 'bg-emerald-100' : 'bg-slate-100'}`}>
-                <svg className={`w-10 h-10 ${whatsAppReady ? 'text-emerald-600' : 'text-slate-400'}`} fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
-                </svg>
-              </div>
-              <div className="flex-1">
-                <h3 className="text-4xl font-black tracking-tighter text-slate-800">WhatsApp Bildirimleri</h3>
-                <p className="text-slate-400 font-bold text-sm mt-1">
-                  {whatsAppReady ? '✅ Bağlı ve Hazır' : whatsAppEnabled ? '⏳ Bağlanıyor...' : '❌ Bağlı Değil'}
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-8">
-              {/* Telefon Numaraları */}
-              <div className="space-y-4">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">
-                  Bildirim Gönderilecek Numaralar
-                </label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <input
-                    type="text"
-                    value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value)}
-                    placeholder="Ana numara"
-                    className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-xl transition-all shadow-inner"
-                  />
-                  <input
-                    type="text"
-                    value={secondPhoneNumber}
-                    onChange={(e) => setSecondPhoneNumber(e.target.value)}
-                    placeholder="2. numara (opsiyonel)"
-                    className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-xl transition-all shadow-inner"
-                  />
-                </div>
-                <button
-                  onClick={handlePhoneNumberSave}
-                  className="px-8 py-6 bg-indigo-600 text-white rounded-[2rem] font-black hover:bg-indigo-700 active:scale-95 transition-all shadow-lg text-sm"
-                >
-                  Kaydet
-                </button>
-                <p className="text-xs text-slate-400 mt-3 px-2">
-                  📱 Tamamlanan görevler bu numaralara bildirim olarak gönderilecek
-                </p>
-              </div>
-
-              {/* Bağlantı Durumu */}
-              <div className="border-t border-slate-100 pt-8">
-                {!whatsAppEnabled ? (
-                  <div className="text-center py-8">
-                    <div className="text-6xl mb-6">📱</div>
-                    <p className="text-slate-600 font-bold mb-8">
-                      WhatsApp hesabınızı bağlayarak görev tamamlama bildirimlerini alabilirsiniz
-                    </p>
-                    <button
-                      onClick={handleWhatsAppInitialize}
-                      className="px-12 py-6 bg-emerald-600 text-white rounded-[2rem] font-black shadow-2xl hover:bg-emerald-700 active:scale-95 transition-all uppercase text-sm tracking-widest"
-                    >
-                      WhatsApp'ı Başlat
-                    </button>
-                  </div>
-                ) : !whatsAppReady && qrCode ? (
-                  <div className="text-center py-8">
-                    <p className="text-slate-700 font-bold text-lg mb-6">
-                      📲 QR Kodu WhatsApp ile Tarayın
-                    </p>
-                    <div className="flex justify-center mb-6">
-                      <img
-                        src={qrCode}
-                        alt="QR Code"
-                        className="w-64 h-64 border-8 border-slate-100 rounded-[3rem] shadow-2xl"
-                      />
-                    </div>
-                    <p className="text-slate-500 text-sm mb-6">
-                      1. WhatsApp'ı açın<br />
-                      2. Menü &gt; Bağlı Cihazlar &gt; Cihaz Bağla<br />
-                      3. Bu QR kodu telefonunuzla tarayın
-                    </p>
-                    <button
-                      onClick={handleWhatsAppDisconnect}
-                      className="px-8 py-4 bg-rose-100 text-rose-600 rounded-[2rem] font-black hover:bg-rose-200 active:scale-95 transition-all text-sm"
-                    >
-                      İptal Et
-                    </button>
-                  </div>
-                ) : whatsAppReady ? (
-                  <div className="text-center py-8">
-                    <div className="text-6xl mb-6">✅</div>
-                    <p className="text-emerald-600 font-black text-2xl mb-4">
-                      WhatsApp Bağlı!
-                    </p>
-                    <p className="text-slate-600 font-bold mb-8">
-                      Artık görevlerinizi tamamladığınızda otomatik olarak bildirim alacaksınız
-                    </p>
-                    <button
-                      onClick={handleWhatsAppDisconnect}
-                      className="px-8 py-4 bg-rose-100 text-rose-600 rounded-[2rem] font-black hover:bg-rose-200 active:scale-95 transition-all text-sm"
-                    >
-                      Bağlantıyı Kes
-                    </button>
-                  </div>
-                ) : (
-                  <div className="text-center py-8">
-                    <div className="text-6xl mb-6 animate-pulse">⏳</div>
-                    <p className="text-slate-600 font-bold">
-                      WhatsApp bağlantısı kuruluyor...
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="flex justify-center pt-8 border-t border-slate-100 mt-8">
-              <button
-                onClick={() => setIsWhatsAppModalOpen(false)}
-                className="px-12 py-6 font-black text-slate-600 hover:text-slate-800 uppercase text-xs tracking-widest transition-colors"
-              >
-                Kapat
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Audit Task Modal */}
-      {isAuditModalOpen && activeAuditTask && (
-        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
-          <div className="modal-shell w-full md:max-w-3xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
-            <div className="flex items-center gap-4 mb-10">
-              <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-sky-100 text-sky-600 text-3xl">
-                🧾
-              </div>
-              <div className="flex-1">
-                <h3 className="text-4xl font-black tracking-tighter text-slate-800">Denetim Görevi</h3>
-                <p className="text-slate-400 font-bold text-sm mt-1">
-                  {activeAuditTask.title}
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-8">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-black text-slate-600 uppercase tracking-widest">
-                  Adım {auditStepIndex + 1} / {activeAuditTask.auditItems?.length || 0}
-                </p>
-                <p className="text-xs font-black text-slate-400 uppercase tracking-widest">
-                  {activeAuditTask.auditItems?.[auditStepIndex] || 'Seçenek yok'}
-                </p>
-              </div>
-
-              <div className="p-8 bg-slate-50 rounded-[2.5rem] border border-slate-100 text-slate-700 text-2xl font-black tracking-tight">
-                {activeAuditTask.auditItems?.[auditStepIndex] || 'Denetim seçeneği bulunamadı.'}
-              </div>
-
-              <div className="flex items-center gap-6">
-                <button
-                  onClick={() => handleAuditDecision('pass')}
-                  className="flex-1 py-6 bg-emerald-600 text-white rounded-[2rem] font-black shadow-2xl hover:bg-emerald-700 active:scale-95 transition-all uppercase text-sm tracking-widest"
-                >
-                  + Uygun
-                </button>
-                <button
-                  onClick={() => handleAuditDecision('fail')}
-                  className="flex-1 py-6 bg-rose-600 text-white rounded-[2rem] font-black shadow-2xl hover:bg-rose-700 active:scale-95 transition-all uppercase text-sm tracking-widest"
-                >
-                  - Uygun Değil
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                  Uygun değilse fotoğraf yükleyin
-                </label>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleAuditPhotoChange}
-                  className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-600"
-                />
-                {auditPhotoDataUrl && (
-                  <img
-                    src={auditPhotoDataUrl}
-                    alt="Denetim Fotoğrafı"
-                    className="w-full max-h-80 object-contain rounded-2xl border border-slate-100"
-                  />
-                )}
-              </div>
-            </div>
-
-            <div className="flex justify-center pt-8 border-t border-slate-100 mt-8">
-              <button
-                onClick={() => {
-                  setIsAuditModalOpen(false);
-                  setActiveAuditTaskId(null);
-                  setAuditStepIndex(0);
-                  setAuditPhotoDataUrl(null);
-                }}
-                className="px-12 py-6 font-black text-slate-600 hover:text-slate-800 uppercase text-xs tracking-widest transition-colors"
-              >
-                Kapat
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Audit Review Modal */}
-      {isAuditReviewOpen && activeAuditReviewTask && (
-        <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
-          <div className="modal-shell w-full md:max-w-3xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
-            <div className="flex items-center gap-4 mb-10">
-              <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-rose-100 text-rose-600 text-3xl">
-                📷
-              </div>
-              <div className="flex-1">
-                <h3 className="text-4xl font-black tracking-tighter text-slate-800">Eksik Fotoğrafları</h3>
-                <p className="text-slate-400 font-bold text-sm mt-1">
-                  {activeAuditReviewTask.title}
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              {activeAuditReviewTask.auditResults?.filter(result => result.status === 'fail').map((result, idx) => (
-                <div key={`${result.item}-${idx}`} className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] space-y-4">
-                  <p className="text-lg font-black text-slate-700">{result.item}</p>
-                  {result.photoDataUrl ? (
-                    <img
-                      src={result.photoDataUrl}
-                      alt={`Eksik fotoğraf - ${result.item}`}
-                      className="w-full max-h-96 object-contain rounded-2xl border border-slate-100"
-                    />
-                  ) : (
-                    <p className="text-sm font-bold text-slate-400">Fotoğraf yok</p>
-                  )}
-                </div>
-              ))}
-              {(!activeAuditReviewTask.auditResults || activeAuditReviewTask.auditResults.filter(result => result.status === 'fail').length === 0) && (
-                <div className="p-6 bg-slate-50 border border-dashed border-slate-200 rounded-[2rem] text-slate-400 font-bold text-sm">
-                  Eksik fotoğraf bulunamadı.
+              {/* Note Section */}
+              {entry.note && (
+                <div className="mb-8 p-6 bg-amber-50 rounded-[2rem] border border-amber-100 text-amber-900">
+                  <h4 className="text-[10px] font-black uppercase tracking-widest mb-2 opacity-60">Notlar</h4>
+                  <p className="font-bold whitespace-pre-wrap">{entry.note}</p>
                 </div>
               )}
-            </div>
 
-            <div className="flex justify-center pt-8 border-t border-slate-100 mt-8">
-              <button
-                onClick={() => {
-                  setIsAuditReviewOpen(false);
-                  setActiveAuditReviewTaskId(null);
-                }}
-                className="px-12 py-6 font-black text-slate-600 hover:text-slate-800 uppercase text-xs tracking-widest transition-colors"
-              >
-                Kapat
-              </button>
+              {/* Actions */}
+              <div className="flex gap-4 pt-6 border-t border-slate-100">
+                <button
+                  onClick={handleDeleteWithConfirm}
+                  className="px-6 py-4 bg-rose-100 text-rose-600 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-rose-200 transition-colors flex items-center gap-2"
+                >
+                  <TrashIcon className="w-4 h-4" /> Sil
+                </button>
+                <div className="flex-1"></div>
+                <button
+                  onClick={handleEditFromDetail}
+                  className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-slate-700 transition-colors shadow-lg"
+                >
+                  Düzenle
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
-      {/* Auth Modal */}
-      {isAuthModalOpen && (
-        <div className="fixed inset-0 modal-overlay z-[120] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
-          <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
-            <div className="flex items-center gap-4 mb-10">
-              <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-indigo-100 text-indigo-600 text-3xl">
-                🔐
-              </div>
-              <div className="flex-1">
-                <h3 className="text-4xl font-black tracking-tighter text-slate-800">Giriş Yap</h3>
-                <p className="text-slate-400 font-bold text-sm mt-1">Kullanıcı adı ve şifre</p>
-              </div>
+      {/* Confirm Action Modal */}
+      {isConfirmActionModalOpen && (
+        <div className="fixed inset-0 modal-overlay z-[200] flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-[2.5rem] shadow-2xl p-8 max-w-sm w-full animate-bounce-in border-2 border-slate-100">
+            <div className="w-16 h-16 rounded-full bg-rose-100 text-rose-500 flex items-center justify-center text-3xl mx-auto mb-6">
+              ⚠️
             </div>
-
-            <div className="space-y-6">
-              <input
-                type="text"
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                placeholder="Kullanıcı adı"
-                className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
-              />
-              <input
-                type="password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                placeholder="Şifre"
-                className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
-              />
+            <h3 className="text-2xl font-black text-center text-slate-800 mb-2">Emin misiniz?</h3>
+            <p className="text-center text-slate-500 font-bold mb-8">{confirmActionMessage}</p>
+            <div className="flex gap-3">
               <button
-                onClick={handleLogin}
-                className="w-full py-5 bg-slate-900 text-white rounded-[2rem] font-black shadow-2xl hover:bg-slate-800 active:scale-95 transition-all uppercase text-xs tracking-widest"
-              >
-                Giriş Yap
-              </button>
-            </div>
-
-            <div className="mt-8 text-xs font-bold text-slate-400">
-              Varsayılan admin: <span className="font-black text-slate-600">admin / admin123</span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Completion Photo Modal */}
-      {isCompletionPhotoModalOpen && (
-        <div className="fixed inset-0 modal-overlay z-[110] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
-          <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
-            <div className="flex items-center gap-4 mb-10">
-              <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-indigo-100 text-indigo-600 text-3xl">
-                📸
-              </div>
-              <div className="flex-1">
-                <h3 className="text-4xl font-black tracking-tighter text-slate-800">Tamamlama Fotoğrafı</h3>
-                <p className="text-slate-400 font-bold text-sm mt-1">Görev tamamlamak için fotoğraf yükleyin</p>
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handleCompletionPhotoChange}
-                className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-600"
-              />
-              {completionPhotoDataUrl && (
-                <img
-                  src={completionPhotoDataUrl}
-                  alt="Tamamlama Fotoğrafı"
-                  className="w-full max-h-96 object-contain rounded-2xl border border-slate-100"
-                />
-              )}
-            </div>
-
-            <div className="flex gap-6 pt-8">
-              <button
-                onClick={() => {
-                  setIsCompletionPhotoModalOpen(false);
-                  setActiveCompletionPhotoTaskId(null);
-                  setCompletionPhotoDataUrl(null);
-                }}
-                className="flex-1 py-5 font-black text-slate-500 hover:text-slate-700 uppercase text-xs tracking-widest"
+                onClick={() => setIsConfirmActionModalOpen(false)}
+                className="flex-1 py-4 bg-slate-100 text-slate-600 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-slate-200 transition-colors"
               >
                 Vazgeç
               </button>
               <button
-                onClick={async () => {
-                  if (!completionPhotoDataUrl || !activeCompletionPhotoTaskId) {
-                    alert('Lütfen fotoğraf yükleyin.');
-                    return;
-                  }
-                  const task = tasks.find(t => t.id === activeCompletionPhotoTaskId);
-                  if (!task) return;
-                  const today = new Date().toISOString().slice(0, 10);
-                  setTasks(prev => prev.map(t => {
-                    if (t.id !== activeCompletionPhotoTaskId) return t;
-                    if (t.repeat === 'daily') {
-                      return {
-                        ...t,
-                        isCompleted: true,
-                        lastCompletedDate: today,
-                        completionPhotoDataUrl
-                      };
-                    }
-                    return { ...t, isCompleted: true, completionPhotoDataUrl };
-                  }));
-
-                  if (whatsAppEnabled || whatsAppReady) {
-                    const category = categories.find(c => c.id === task.categoryId);
-                    const message = `✅ Görev Tamamlandı!\n\n📝 ${task.title}\n📁 Kategori: ${category?.name || 'Bilinmiyor'}\n⏰ ${new Date().toLocaleString('tr-TR')}`;
-                    try {
-                      await sendNotificationMessage(message);
-                    } catch (error) {
-                      console.error('WhatsApp mesaj hatası:', error);
-                    }
-                  }
-
-                  setIsCompletionPhotoModalOpen(false);
-                  setActiveCompletionPhotoTaskId(null);
-                  setCompletionPhotoDataUrl(null);
-                }}
-                className="flex-[2] py-5 bg-slate-900 text-white rounded-[2rem] font-black shadow-2xl hover:bg-slate-800 active:scale-95 transition-all uppercase text-xs tracking-widest"
+                onClick={executeConfirmAction}
+                className="flex-1 py-4 bg-rose-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-rose-600 transition-colors shadow-lg shadow-rose-200"
               >
-                Fotoğrafı Kaydet ve Tamamla
+                Evet, Sil
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Success Notification Popup */}
-      {successNotification.show && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 pointer-events-none">
-          <div className="pointer-events-auto animate-bounce-in">
-            <div className="relative overflow-hidden bg-white rounded-[2.5rem] shadow-2xl border-2 border-emerald-200 max-w-md w-full">
-              {/* Animated background gradient */}
-              <div className="absolute inset-0 bg-gradient-to-br from-emerald-50 via-white to-emerald-50 opacity-80" />
+      {/* Photo Lightbox */}
+      {lightboxPhoto && (
+        <div
+          className="fixed inset-0 z-[250] bg-black/95 backdrop-blur-xl flex items-center justify-center p-4 animate-fade-in cursor-zoom-out"
+          onClick={() => setLightboxPhoto(null)}
+        >
+          <button
+            onClick={() => setLightboxPhoto(null)}
+            className="absolute top-6 right-6 p-4 bg-white/10 text-white rounded-full hover:bg-white/20 transition-all"
+          >
+            ✕
+          </button>
+          <img
+            src={lightboxPhoto}
+            className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl animate-zoom-in"
+            alt="Tam Ekran"
+          />
+        </div>
+      )}
 
-              {/* Success icon with pulse animation */}
-              <div className="relative p-8 flex flex-col items-center text-center">
-                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center mb-6 shadow-lg shadow-emerald-200 animate-pulse-slow">
-                  <span className="text-4xl">{successNotification.icon}</span>
+      {/* Task Detail Modal */}
+      {isTaskDetailModalOpen && (() => {
+        const task = tasks.find(t => t.id === activeTaskDetailId);
+        if (!task) return null;
+        const category = categories.find(c => c.id === task.categoryId);
+
+        return (
+          <div className="fixed inset-0 modal-overlay z-[150] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-3xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center justify-between mb-8">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${task.isExpired ? 'bg-rose-50 text-rose-700 border-rose-200' :
+                      task.isCompleted ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                        'bg-sky-50 text-sky-700 border-sky-200'
+                      }`}>
+                      {task.isExpired ? 'Gecikti' : task.isCompleted ? 'Tamamlandı' : 'Aktif'}
+                    </span>
+                    {task.scheduledFor && task.scheduledFor > Date.now() && (
+                      <span className="px-3 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-black uppercase tracking-widest">
+                        Planlandı
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="text-3xl font-black tracking-tighter text-slate-800 leading-tight">{task.title}</h3>
                 </div>
-
-                <h3 className="text-2xl font-black text-slate-800 mb-3 tracking-tight">
-                  Başarılı!
-                </h3>
-
-                <p className="text-slate-600 font-bold whitespace-pre-line leading-relaxed">
-                  {successNotification.message}
-                </p>
-
-                {/* Close button */}
                 <button
-                  onClick={() => setSuccessNotification({ show: false, message: '', icon: '' })}
-                  className="mt-8 px-8 py-4 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-[1.5rem] font-black shadow-lg hover:shadow-xl hover:from-emerald-600 hover:to-emerald-700 active:scale-95 transition-all uppercase text-xs tracking-widest"
+                  onClick={() => setIsTaskDetailModalOpen(false)}
+                  className="p-4 bg-slate-100 rounded-2xl text-slate-500 hover:bg-slate-200 transition-colors"
                 >
-                  Tamam
+                  <span className="text-2xl">✕</span>
                 </button>
               </div>
 
-              {/* Decorative elements */}
-              <div className="absolute top-4 right-4 w-16 h-16 rounded-full bg-emerald-200/30 blur-2xl" />
-              <div className="absolute bottom-4 left-4 w-20 h-20 rounded-full bg-emerald-300/20 blur-3xl" />
+              {/* Info Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                <div className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] space-y-4">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl ${category?.color || 'bg-slate-200'} text-white`}>
+                      {category?.icon || '📌'}
+                    </div>
+                    <div>
+                      <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Kategori</div>
+                      <div className="font-bold text-slate-700">{category?.name || 'Genel'}</div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-xl bg-indigo-100 text-indigo-600">
+                      ⏱️
+                    </div>
+                    <div>
+                      <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Süre / Tekrar</div>
+                      <div className="font-bold text-slate-700">
+                        {task.expectedDuration} · {task.repeat === 'daily' ? 'Her Gün' : 'Tek Sefer'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] space-y-4">
+                  {task.scheduledFor && (
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-xl bg-amber-100 text-amber-600">
+                        📅
+                      </div>
+                      <div>
+                        <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Planlanan Tarih</div>
+                        <div className="font-bold text-slate-700">
+                          {new Date(task.scheduledFor).toLocaleString('tr-TR')}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {task.reminderStartTime && (
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-xl bg-purple-100 text-purple-600">
+                        🔔
+                      </div>
+                      <div>
+                        <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Hatırlatma</div>
+                        <div className="font-bold text-slate-700">
+                          {task.reminderStartTime} {task.reminderInterval ? `(Her ${task.reminderInterval} dk)` : ''}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {!task.scheduledFor && !task.reminderStartTime && (
+                    <div className="h-full flex items-center justify-center text-slate-400 font-bold text-sm text-center opacity-60">
+                      Ek zamanlama ayarı yok
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Photos Section */}
+              {(task.completionPhotoDataUrl || (task.auditResults && task.auditResults.some(r => r.photoDataUrl))) && (
+                <div className="mb-8 p-6 bg-slate-50 rounded-[2rem] border border-slate-100">
+                  <h4 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-4">Görev Fotoğrafları</h4>
+                  <div className="flex gap-4 overflow-x-auto pb-2 custom-scrollbar">
+                    {task.completionPhotoDataUrl && (
+                      <div
+                        onClick={() => setLightboxPhoto(task.completionPhotoDataUrl || null)}
+                        className="relative w-32 h-32 shrink-0 rounded-2xl overflow-hidden cursor-zoom-in border-2 border-slate-200 hover:border-indigo-400 transition-all shadow-sm hover:shadow-md group"
+                      >
+                        <div className="absolute top-2 left-2 bg-black/50 text-white text-[10px] font-bold px-2 py-1 rounded-lg backdrop-blur-sm">Tamamlama</div>
+                        <img src={task.completionPhotoDataUrl} className="w-full h-full object-cover" alt="Tamamlama" />
+                      </div>
+                    )}
+                    {task.auditResults?.filter(r => r.photoDataUrl).map((result, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => setLightboxPhoto(result.photoDataUrl || null)}
+                        className="relative w-32 h-32 shrink-0 rounded-2xl overflow-hidden cursor-zoom-in border-2 border-slate-200 hover:border-rose-400 transition-all shadow-sm hover:shadow-md group"
+                      >
+                        <div className="absolute top-2 left-2 bg-rose-500/80 text-white text-[10px] font-bold px-2 py-1 rounded-lg backdrop-blur-sm truncate max-w-[90%]">{result.item}</div>
+                        <img src={result.photoDataUrl} className="w-full h-full object-cover" alt="Denetim" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex gap-4 pt-6 border-t border-slate-100">
+                {currentUser?.role === 'admin' && (
+                  <button
+                    onClick={(e) => {
+                      if (confirm('Görevi silmek istediğinize emin misiniz?')) {
+                        deleteTask(task.id, e);
+                        setIsTaskDetailModalOpen(false);
+                      }
+                    }}
+                    className="px-6 py-4 bg-rose-100 text-rose-600 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-rose-200 transition-colors flex items-center gap-2"
+                  >
+                    <TrashIcon className="w-4 h-4" /> Sil
+                  </button>
+                )}
+
+                <div className="flex-1"></div>
+
+                {!task.isCompleted && !task.isExpired && (
+                  <button
+                    onClick={() => {
+                      handleRequestTaskCompletion(task);
+                      setIsTaskDetailModalOpen(false);
+                    }}
+                    className="px-8 py-4 bg-emerald-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-200"
+                  >
+                    Görevi Tamamla
+                  </button>
+                )}
+
+                {currentUser?.role === 'admin' && !task.isCompleted && (
+                  <button
+                    onClick={() => {
+                      openEditTaskModal(task.id);
+                      setIsTaskDetailModalOpen(false);
+                    }}
+                    className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-slate-700 transition-colors shadow-lg"
+                  >
+                    Düzenle
+                  </button>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
-    </div>
+        );
+      })()}
+
+      {/* Rental Payment Modal */}
+      {isRentalPaymentModalOpen && activeRentalPaymentId && (() => {
+        const rental = rentals.find(r => r.id === activeRentalPaymentId);
+        if (!rental) return null;
+        const paid = rental.paidAmount || 0;
+        const remaining = Math.max(0, rental.amount - paid);
+
+        return (
+          <div className="fixed inset-0 modal-overlay z-[180] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center gap-4 mb-8">
+                <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-emerald-100 text-emerald-600 text-3xl">
+                  💵
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-3xl font-black tracking-tighter text-slate-800">Kira Ödemesi</h3>
+                  <p className="text-slate-400 font-bold text-sm mt-1">Daire {rental.unitNumber} - {rental.tenantName}</p>
+                </div>
+              </div>
+
+              {/* Summary Card */}
+              <div className="p-6 rounded-[2rem] bg-slate-50 border border-slate-100 mb-8 space-y-4">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-black uppercase tracking-widest text-slate-400">Toplam Kira</span>
+                  <span className="font-black text-slate-700 text-lg">{formatCurrency(rental.amount)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-black uppercase tracking-widest text-emerald-600">Ödenen</span>
+                  <span className="font-black text-emerald-600 text-lg">{formatCurrency(paid)}</span>
+                </div>
+                <div className="pt-4 border-t border-slate-200/50 flex justify-between items-center">
+                  <span className="text-xs font-black uppercase tracking-widest text-rose-600">Kalan</span>
+                  <span className="font-black text-rose-600 text-2xl">{formatCurrency(remaining)}</span>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Ödeme Tutarı</label>
+                  <input
+                    type="number"
+                    value={rentalPaymentAmount}
+                    onChange={(e) => setRentalPaymentAmount(e.target.value)}
+                    placeholder={remaining.toString()}
+                    className="w-full p-5 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 font-black text-2xl text-slate-700"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Not (Opsiyonel)</label>
+                  <textarea
+                    value={rentalPaymentNote}
+                    onChange={(e) => setRentalPaymentNote(e.target.value)}
+                    placeholder="Ödeme notu..."
+                    className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 font-bold text-slate-600 h-24 resize-none"
+                  />
+                </div>
+
+                {/* Reminder Toggle */}
+                <div className="p-4 rounded-2xl bg-amber-50 border border-amber-100">
+                  <div className="flex items-center justify-between mb-4">
+                    <label className="flex items-center gap-2 text-xs font-black text-amber-900 uppercase tracking-widest cursor-pointer">
+                      <span>⏰ Kalan Bakiye Hatırlatması</span>
+                    </label>
+                    <div className="relative inline-block w-10 h-5 transition duration-200 ease-in-out">
+                      <input
+                        type="checkbox"
+                        id="rental-reminder-toggle"
+                        className="peer absolute opacity-0 w-0 h-0"
+                        checked={rentalPaymentSetReminder}
+                        onChange={(e) => setRentalPaymentSetReminder(e.target.checked)}
+                      />
+                      <label
+                        htmlFor="rental-reminder-toggle"
+                        className={`block overflow-hidden h-5 rounded-full cursor-pointer transition-colors duration-200 ${rentalPaymentSetReminder ? 'bg-amber-500' : 'bg-slate-300'}`}
+                      ></label>
+                      <div className={`absolute left-1 bottom-1 bg-white w-3 h-3 rounded-full transition-transform duration-200 ${rentalPaymentSetReminder ? 'translate-x-5' : 'translate-x-0'}`}></div>
+                    </div>
+                  </div>
+
+                  {rentalPaymentSetReminder && (
+                    <div className="grid grid-cols-2 gap-3 animate-fade-in">
+                      <input
+                        type="date"
+                        value={rentalPaymentReminderDate}
+                        onChange={(e) => setRentalPaymentReminderDate(e.target.value)}
+                        className="w-full p-3 bg-white border border-amber-200 rounded-xl outline-none font-bold text-slate-600 text-sm"
+                      />
+                      <input
+                        type="time"
+                        value={rentalPaymentReminderTime}
+                        onChange={(e) => setRentalPaymentReminderTime(e.target.value)}
+                        className="w-full p-3 bg-white border border-amber-200 rounded-xl outline-none font-bold text-slate-600 text-sm"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex gap-4 pt-4">
+                  <button
+                    onClick={() => setIsRentalPaymentModalOpen(false)}
+                    className="flex-1 py-4 bg-slate-100 text-slate-500 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-slate-200 transition-colors"
+                  >
+                    İptal
+                  </button>
+                  <button
+                    onClick={handleSaveRentalPayment}
+                    className="flex-[2] py-4 bg-emerald-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-emerald-600 shadow-lg shadow-emerald-200 transition-colors"
+                  >
+                    Ödemeyi Kaydet
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Auth Modal */}
+      {
+        isAuthModalOpen && (
+          <div className="fixed inset-0 modal-overlay z-[120] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center gap-4 mb-10">
+                <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-indigo-100 text-indigo-600 text-3xl">
+                  🔐
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-4xl font-black tracking-tighter text-slate-800">Giriş Yap</h3>
+                  <p className="text-slate-400 font-bold text-sm mt-1">Kullanıcı adı ve şifre</p>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <input
+                  type="text"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  placeholder="Kullanıcı adı"
+                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                />
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="Şifre"
+                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                />
+                <button
+                  onClick={handleLogin}
+                  className="w-full py-5 bg-slate-900 text-white rounded-[2rem] font-black shadow-2xl hover:bg-slate-800 active:scale-95 transition-all uppercase text-xs tracking-widest"
+                >
+                  Giriş Yap
+                </button>
+              </div>
+
+              <div className="mt-8 text-xs font-bold text-slate-400">
+                Varsayılan admin: <span className="font-black text-slate-600">admin / admin123</span>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Completion Photo Modal */}
+      {
+        isCompletionPhotoModalOpen && (
+          <div className="fixed inset-0 modal-overlay z-[110] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center gap-4 mb-10">
+                <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-indigo-100 text-indigo-600 text-3xl">
+                  📸
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-4xl font-black tracking-tighter text-slate-800">Tamamlama Fotoğrafı</h3>
+                  <p className="text-slate-400 font-bold text-sm mt-1">Görev tamamlamak için fotoğraf yükleyin</p>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleCompletionPhotoChange}
+                  className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold text-slate-600"
+                />
+                {completionPhotoDataUrl && (
+                  <img
+                    src={completionPhotoDataUrl}
+                    alt="Tamamlama Fotoğrafı"
+                    className="w-full max-h-96 object-contain rounded-2xl border border-slate-100"
+                  />
+                )}
+              </div>
+
+              <div className="flex gap-6 pt-8">
+                <button
+                  onClick={() => {
+                    setIsCompletionPhotoModalOpen(false);
+                    setActiveCompletionPhotoTaskId(null);
+                    setCompletionPhotoDataUrl(null);
+                  }}
+                  className="flex-1 py-5 font-black text-slate-500 hover:text-slate-700 uppercase text-xs tracking-widest"
+                >
+                  Vazgeç
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!completionPhotoDataUrl || !activeCompletionPhotoTaskId) {
+                      alert('Lütfen fotoğraf yükleyin.');
+                      return;
+                    }
+                    const task = tasks.find(t => t.id === activeCompletionPhotoTaskId);
+                    if (!task) return;
+                    const today = new Date().toISOString().slice(0, 10);
+                    setTasks(prev => prev.map(t => {
+                      if (t.id !== activeCompletionPhotoTaskId) return t;
+                      if (t.repeat === 'daily') {
+                        return {
+                          ...t,
+                          isCompleted: true,
+                          lastCompletedDate: today,
+                          completionPhotoDataUrl
+                        };
+                      }
+                      return { ...t, isCompleted: true, completionPhotoDataUrl };
+                    }));
+
+                    if (whatsAppEnabled || whatsAppReady) {
+                      const category = categories.find(c => c.id === task.categoryId);
+                      const message = `✅ Görev Tamamlandı!\n\n📝 ${task.title}\n📁 Kategori: ${category?.name || 'Bilinmiyor'}\n⏰ ${new Date().toLocaleString('tr-TR')}`;
+                      try {
+                        await sendNotificationMessage(message);
+                      } catch (error) {
+                        console.error('WhatsApp mesaj hatası:', error);
+                      }
+                    }
+
+                    setIsCompletionPhotoModalOpen(false);
+                    setActiveCompletionPhotoTaskId(null);
+                    setCompletionPhotoDataUrl(null);
+                  }}
+                  className="flex-[2] py-5 bg-slate-900 text-white rounded-[2rem] font-black shadow-2xl hover:bg-slate-800 active:scale-95 transition-all uppercase text-xs tracking-widest"
+                >
+                  Fotoğrafı Kaydet ve Tamamla
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Task Confirmation Modal */}
+      {
+        confirmTaskModal.isOpen && confirmTaskModal.task && (
+          <div className="fixed inset-0 modal-overlay z-[115] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-md p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex flex-col items-center text-center">
+                <div className="w-20 h-20 rounded-[2.5rem] bg-indigo-50 text-indigo-500 mb-6 flex items-center justify-center text-4xl shadow-sm">
+                  📝
+                </div>
+                <h3 className="text-2xl font-black text-slate-800 tracking-tight">Görevi Tamamla</h3>
+                <p className="mt-3 text-slate-500 font-bold">
+                  Bu göreve başlamak istediğinize emin misiniz?
+                </p>
+
+                <div className="mt-6 w-full p-4 bg-slate-50 rounded-3xl border border-slate-100">
+                  <div className="font-black text-slate-800 text-lg mb-1">{confirmTaskModal.task.title}</div>
+                  {categories.find(c => c.id === confirmTaskModal.task?.categoryId) && (
+                    <div className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center justify-center gap-2">
+                      <span>{categories.find(c => c.id === confirmTaskModal.task?.categoryId)?.icon}</span>
+                      {categories.find(c => c.id === confirmTaskModal.task?.categoryId)?.name}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex gap-4 w-full mt-8">
+                  <button
+                    onClick={() => setConfirmTaskModal({ isOpen: false, task: null })}
+                    className="flex-1 py-4 font-black text-slate-400 hover:text-slate-600 uppercase text-xs tracking-widest transition-colors"
+                  >
+                    Vazgeç
+                  </button>
+                  <button
+                    onClick={handleConfirmTaskCompletion}
+                    className="flex-[2] py-4 bg-indigo-600 text-white rounded-[2rem] font-black shadow-xl shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all uppercase text-xs tracking-widest"
+                  >
+                    Tamamla
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Success Notification Popup */}
+      {
+        successNotification.show && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 pointer-events-none">
+            <div className="pointer-events-auto animate-bounce-in">
+              <div className="relative overflow-hidden bg-white rounded-[2.5rem] shadow-2xl border-2 border-emerald-200 max-w-md w-full">
+                {/* Animated background gradient */}
+                <div className="absolute inset-0 bg-gradient-to-br from-emerald-50 via-white to-emerald-50 opacity-80" />
+
+                {/* Success icon with pulse animation */}
+                <div className="relative p-8 flex flex-col items-center text-center">
+                  <div className="w-20 h-20 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center mb-6 shadow-lg shadow-emerald-200 animate-pulse-slow">
+                    <span className="text-4xl">{successNotification.icon}</span>
+                  </div>
+
+                  <h3 className="text-2xl font-black text-slate-800 mb-3 tracking-tight">
+                    Başarılı!
+                  </h3>
+
+                  <p className="text-slate-600 font-bold whitespace-pre-line leading-relaxed">
+                    {successNotification.message}
+                  </p>
+
+                  {/* Close button */}
+                  <button
+                    onClick={() => setSuccessNotification({ show: false, message: '', icon: '' })}
+                    className="mt-8 px-8 py-4 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-[1.5rem] font-black shadow-lg hover:shadow-xl hover:from-emerald-600 hover:to-emerald-700 active:scale-95 transition-all uppercase text-xs tracking-widest"
+                  >
+                    Tamam
+                  </button>
+                </div>
+
+                {/* Decorative elements */}
+                <div className="absolute top-4 right-4 w-16 h-16 rounded-full bg-emerald-200/30 blur-2xl" />
+                <div className="absolute bottom-4 left-4 w-20 h-20 rounded-full bg-emerald-300/20 blur-3xl" />
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {/* Mobile Bottom Navigation */}
+      <div className="lg:hidden fixed bottom-6 left-6 right-6 z-[90] pointer-events-none">
+        <nav className="pointer-events-auto bg-white/90 backdrop-blur-2xl border border-white/40 shadow-2xl shadow-indigo-500/10 rounded-[2.5rem] p-2 flex items-center justify-between gap-1">
+          <button
+            onClick={() => setActiveSection('home')}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-3 rounded-[2rem] transition-all duration-300 ${activeSection === 'home'
+              ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/20'
+              : 'text-slate-400 hover:bg-slate-100'
+              }`}
+          >
+            <span className="text-xl">✨</span>
+          </button>
+
+          <button
+            onClick={() => setActiveSection('tasks')}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-3 rounded-[2rem] transition-all duration-300 ${activeSection === 'tasks'
+              ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/20'
+              : 'text-slate-400 hover:bg-slate-100'
+              }`}
+          >
+            <span className="text-xl">📝</span>
+          </button>
+
+          <button
+            onClick={() => setActiveSection('rentals')}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-3 rounded-[2rem] transition-all duration-300 ${activeSection === 'rentals'
+              ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/20'
+              : 'text-slate-400 hover:bg-slate-100'
+              }`}
+          >
+            <span className="text-xl">🏠</span>
+          </button>
+
+          <button
+            onClick={() => setActiveSection('assets')}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-3 rounded-[2rem] transition-all duration-300 ${activeSection === 'assets'
+              ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/20'
+              : 'text-slate-400 hover:bg-slate-100'
+              }`}
+          >
+            <span className="text-xl">🧰</span>
+          </button>
+
+          <button
+            onClick={() => setActiveSection('account')}
+            className={`flex-1 flex flex-col items-center justify-center gap-1 py-3 rounded-[2rem] transition-all duration-300 ${activeSection === 'account'
+              ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/20'
+              : 'text-slate-400 hover:bg-slate-100'
+              }`}
+          >
+            <span className="text-xl">💰</span>
+          </button>
+        </nav>
+      </div>
+    </div >
   );
 };
 

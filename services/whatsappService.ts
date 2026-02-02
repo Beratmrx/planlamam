@@ -10,8 +10,10 @@ const BACKEND_URL = isDockerEnv || isSameOriginProxy ? '' : (!ENV_BACKEND_URL ||
 
 export interface WhatsAppStatus {
   ready: boolean;
-  qrCode: string | null;
-  hasClient: boolean;
+  message: string;
+  hasCredentials: boolean;
+  phoneNumber?: string;
+  verifiedName?: string;
 }
 
 export const initializeWhatsApp = async (): Promise<{ success: boolean; message: string }> => {
@@ -39,7 +41,7 @@ export const getWhatsAppStatus = async (): Promise<WhatsAppStatus> => {
     return await response.json();
   } catch (error) {
     console.error('WhatsApp durum kontrolü hatası:', error);
-    return { ready: false, qrCode: null, hasClient: false };
+    return { ready: false, message: 'Bağlantı hatası', hasCredentials: false };
   }
 };
 
@@ -65,7 +67,7 @@ export const logoutWhatsApp = async (): Promise<{ success: boolean; message: str
     });
     return await response.json();
   } catch (error) {
-    console.error('WhatsApp oturum kapatma hatası:', error);
-    return { success: false, message: 'Oturum kapatılamadı' };
+    console.error('WhatsApp logout hatası:', error);
+    return { success: false, message: 'Logout işlemi başarısız' };
   }
 };

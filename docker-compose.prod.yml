@@ -7,19 +7,19 @@ services:
     restart: unless-stopped
     ports:
       - "3002:3002"
-    shm_size: '2gb'
+    env_file:
+      - .env
+      - ./backend/.env
+      - .env
     environment:
       - NODE_ENV=production
       - PORT=3002
       - JSON_LIMIT=10mb
-      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-      - CORS_ORIGIN=https://etkegym.com
-      - DISPLAY=:99
-    volumes:
-      # WhatsApp session ve storage için persistent volume
-      - whatsapp-data:/app/.wwebjs_auth
-      - whatsapp-cache:/app/.wwebjs_cache
+      - CORS_ORIGIN=${CORS_ORIGIN:-https://etkegym.com}
+      - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID}
+      - WHATSAPP_BUSINESS_ACCOUNT_ID=${WHATSAPP_BUSINESS_ACCOUNT_ID}
+      - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN}
+      - WHATSAPP_WEBHOOK_VERIFY_TOKEN=${WHATSAPP_WEBHOOK_VERIFY_TOKEN:-planla_webhook_token_2024}
     networks:
       - planla-network
     healthcheck:
@@ -33,12 +33,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-volumes:
-  whatsapp-data:
-    driver: local
-  whatsapp-cache:
-    driver: local
 
 networks:
   planla-network:

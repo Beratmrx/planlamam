@@ -111,7 +111,14 @@ MYSQL_PASSWORD=planla_sifre
 
 # Backend’in hangi frontend’e izin vereceği (Netlify adresiniz)
 CORS_ORIGIN=https://sizin-site-adiniz.netlify.app
+
+# WhatsApp Cloud API (Meta'dan kalıcı token)
+WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
+WHATSAPP_ACCESS_TOKEN=your_permanent_access_token
+WHATSAPP_WEBHOOK_VERIFY_TOKEN=planla_webhook_token_2024
 ```
+
+Bu `.env` proje kökünde olmalı; `docker-compose.prod.yml` hem kök `.env` hem `backend/.env` okur. WhatsApp değişkenlerini kök `.env` veya `backend/.env` içinde tanımlayabilirsiniz.
 
 Kaydedin (Ctrl+O, Enter, Ctrl+X).
 

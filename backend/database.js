@@ -84,12 +84,13 @@ async function upsertJsonRows(conn, table, items) {
 
 export async function getStorageFormat() {
   try {
-    const [users, categories, tasks, rentals, assets, settings] = await Promise.all([
+    const [users, categories, tasks, rentals, assets, accountEntries, settings] = await Promise.all([
       readAllJsonRows('users'),
       readAllJsonRows('categories'),
       readAllJsonRows('tasks'),
       readAllJsonRows('rentals'),
       readAllJsonRows('assets'),
+      readAllJsonRows('account_entries'),
       getSettings()
     ]);
 
@@ -105,6 +106,7 @@ export async function getStorageFormat() {
       tasks,
       rentals,
       assets,
+      accountEntries,
       ...mergedSettings
     };
   } catch (error) {
@@ -124,6 +126,7 @@ export async function saveStorageFormat(payload) {
     await upsertJsonRows(conn, 'tasks', payload?.tasks);
     await upsertJsonRows(conn, 'rentals', payload?.rentals);
     await upsertJsonRows(conn, 'assets', payload?.assets);
+    await upsertJsonRows(conn, 'account_entries', payload?.accountEntries);
 
     const now = Date.now();
     const settings = {
@@ -140,9 +143,9 @@ export async function saveStorageFormat(payload) {
     );
 
     await conn.commit();
-    return true;
+    return now;
   } catch (error) {
-    try { await conn.rollback(); } catch {}
+    try { await conn.rollback(); } catch { }
     console.error('❌ MySQL storage kaydetme hatası:', error);
     return false;
   } finally {

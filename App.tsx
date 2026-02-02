@@ -74,6 +74,8 @@ const App: React.FC = () => {
   const [auditPhotoDataUrl, setAuditPhotoDataUrl] = useState<string | null>(null);
   const [isAuditReviewOpen, setIsAuditReviewOpen] = useState(false);
   const [activeAuditReviewTaskId, setActiveAuditReviewTaskId] = useState<string | null>(null);
+  const [isAuditDetailOpen, setIsAuditDetailOpen] = useState(false);
+  const [activeAuditDetailTaskId, setActiveAuditDetailTaskId] = useState<string | null>(null);
   const [isCompletionPhotoModalOpen, setIsCompletionPhotoModalOpen] = useState(false);
   const [activeCompletionPhotoTaskId, setActiveCompletionPhotoTaskId] = useState<string | null>(null);
   const [completionPhotoDataUrl, setCompletionPhotoDataUrl] = useState<string | null>(null);
@@ -1408,6 +1410,10 @@ const App: React.FC = () => {
     () => tasks.find(t => t.id === activeAuditReviewTaskId) || null,
     [tasks, activeAuditReviewTaskId]
   );
+  const activeAuditDetailTask = useMemo(
+    () => tasks.find(t => t.id === activeAuditDetailTaskId) || null,
+    [tasks, activeAuditDetailTaskId]
+  );
 
   const toggleTask = async (taskId: string) => {
     const task = tasks.find(t => t.id === taskId);
@@ -1449,6 +1455,13 @@ const App: React.FC = () => {
 
   const handleRequestTaskCompletion = (task: Task) => {
     if (task.isExpired) return;
+
+    const taskCategory = categories.find(c => c.id === task.categoryId);
+    if (taskCategory?.name === 'Denetim') {
+      // Denetim görevinde "Tamamla"ya basınca doğrudan tamamlanmaz; denetim seçenekleri (adımlar) açılır
+      openAuditModal(task.id);
+      return;
+    }
 
     // Eğer görev zaten tamamlanmışsa, direk geri al (onay sorma)
     if (task.isCompleted) {
@@ -2227,8 +2240,17 @@ const App: React.FC = () => {
                             <div
                               key={task.id}
                               onClick={() => {
-                                setActiveTaskDetailId(task.id);
-                                setIsTaskDetailModalOpen(true);
+                                if (category?.name === 'Denetim') {
+                                  if (task.isCompleted) {
+                                    setActiveAuditDetailTaskId(task.id);
+                                    setIsAuditDetailOpen(true);
+                                  } else {
+                                    openAuditModal(task.id);
+                                  }
+                                } else {
+                                  setActiveTaskDetailId(task.id);
+                                  setIsTaskDetailModalOpen(true);
+                                }
                               }}
                               className={`group relative overflow-hidden flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow cursor-pointer ${task.isExpired ? 'ring-2 ring-rose-300/60' : task.isCompleted ? 'opacity-70' : ''
                                 }`}
@@ -2430,9 +2452,10 @@ const App: React.FC = () => {
                           key={task.id}
                           onClick={() => {
                             if (isTaskAudit) {
-                              if (task.isCompleted && task.auditResults?.some(result => result.status === 'fail')) {
-                                setActiveAuditReviewTaskId(task.id);
-                                setIsAuditReviewOpen(true);
+                              if (task.isCompleted) {
+                                // Tamamlandıktan sonra tıklanınca seçenekler tekrar açılmaz, sadece detay gösterilir
+                                setActiveAuditDetailTaskId(task.id);
+                                setIsAuditDetailOpen(true);
                               } else {
                                 openAuditModal(task.id);
                               }
@@ -2448,7 +2471,12 @@ const App: React.FC = () => {
 
                           <div className="flex items-start md:items-center gap-5 md:gap-8 flex-1">
                             <button
-                              onClick={(e) => { e.stopPropagation(); if (!task.isExpired) handleRequestTaskCompletion(task); }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (task.isExpired) return;
+                                if (isTaskAudit) openAuditModal(task.id);
+                                else handleRequestTaskCompletion(task);
+                              }}
                               disabled={task.isExpired}
                               className={`w-14 h-14 md:w-12 md:h-12 rounded-2xl border flex items-center justify-center transition-all duration-300 touch-manipulation ${task.isExpired
                                 ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed'
@@ -4106,6 +4134,60 @@ const App: React.FC = () => {
         )
       }
 
+      {/* Denetim Detay Modal - tamamlandıktan sonra tıklanınca sadece detay (seçenekler tekrar açılmaz) */}
+      {
+        isAuditDetailOpen && activeAuditDetailTask && (
+          <div className="fixed inset-0 modal-overlay z-[100] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-3xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center gap-4 mb-10">
+                <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-sky-100 text-sky-600 text-3xl">
+                  🧾
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-4xl font-black tracking-tighter text-slate-800">Denetim Detayı</h3>
+                  <p className="text-slate-400 font-bold text-sm mt-1">
+                    {activeAuditDetailTask.title}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {(activeAuditDetailTask.auditResults || activeAuditDetailTask.auditItems?.map(item => ({ item, status: 'pending' as const })) || []).map((result: { item: string; status: string; photoDataUrl?: string }, idx: number) => (
+                  <div key={`${result.item}-${idx}`} className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] flex flex-col sm:flex-row sm:items-center gap-4">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-lg font-black text-slate-700">{result.item}</p>
+                      <span className={`inline-block mt-2 px-3 py-1 rounded-xl text-xs font-black uppercase tracking-widest ${result.status === 'pass' ? 'bg-emerald-100 text-emerald-700' : result.status === 'fail' ? 'bg-rose-100 text-rose-700' : 'bg-slate-200 text-slate-600'}`}>
+                        {result.status === 'pass' ? 'Uygun' : result.status === 'fail' ? 'Uygun değil' : 'Bekliyor'}
+                      </span>
+                    </div>
+                    {result.photoDataUrl && (
+                      <img
+                        src={result.photoDataUrl}
+                        alt={result.item}
+                        className="w-24 h-24 sm:w-32 sm:h-32 object-cover rounded-2xl border border-slate-200 shrink-0 cursor-pointer hover:opacity-90"
+                        onClick={() => setLightboxPhoto(result.photoDataUrl || null)}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex justify-center pt-8 border-t border-slate-100 mt-8">
+                <button
+                  onClick={() => {
+                    setIsAuditDetailOpen(false);
+                    setActiveAuditDetailTaskId(null);
+                  }}
+                  className="px-12 py-6 font-black text-slate-600 hover:text-slate-800 uppercase text-xs tracking-widest transition-colors"
+                >
+                  Kapat
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
       {/* Account Detail Modal */}
       {isAccountDetailModalOpen && (() => {
         const entry = accountEntries.find(e => e.id === activeAccountEntryId);
@@ -4432,12 +4514,18 @@ const App: React.FC = () => {
                 {!task.isCompleted && !task.isExpired && (
                   <button
                     onClick={() => {
-                      handleRequestTaskCompletion(task);
-                      setIsTaskDetailModalOpen(false);
+                      const taskCat = categories.find(c => c.id === task.categoryId);
+                      if (taskCat?.name === 'Denetim') {
+                        openAuditModal(task.id);
+                        setIsTaskDetailModalOpen(false);
+                      } else {
+                        handleRequestTaskCompletion(task);
+                        setIsTaskDetailModalOpen(false);
+                      }
                     }}
                     className="px-8 py-4 bg-emerald-500 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-200"
                   >
-                    Görevi Tamamla
+                    {categories.find(c => c.id === task.categoryId)?.name === 'Denetim' ? 'Denetim seçeneklerini tamamla' : 'Görevi Tamamla'}
                   </button>
                 )}
 

@@ -14,6 +14,7 @@ const DEFAULT_STORAGE = {
   tasks: [],
   rentals: [],
   assets: [],
+  accountEntries: [],
   whatsAppEnabled: false,
   phoneNumber: '',
   secondPhoneNumber: '',
@@ -33,10 +34,12 @@ export async function getStorageFormat() {
   try {
     await ensureStorageFile();
     const data = await fs.readFile(STORAGE_FILE, 'utf8');
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    if (!Array.isArray(parsed.accountEntries)) parsed.accountEntries = [];
+    return parsed;
   } catch (error) {
     console.error('❌ Storage okuma hatası:', error);
-    return DEFAULT_STORAGE;
+    return { ...DEFAULT_STORAGE };
   }
 }
 
@@ -51,6 +54,7 @@ export async function saveStorageFormat(payload) {
       tasks: payload?.tasks || [],
       rentals: payload?.rentals || [],
       assets: payload?.assets || [],
+      accountEntries: Array.isArray(payload?.accountEntries) ? payload.accountEntries : [],
       whatsAppEnabled: Boolean(payload?.whatsAppEnabled),
       phoneNumber: payload?.phoneNumber || '',
       secondPhoneNumber: payload?.secondPhoneNumber || '',

@@ -103,8 +103,10 @@ nano .env
 Örnek içerik (kendi değerlerinizle değiştirin):
 
 ```env
-# MySQL (docker-compose.prod.yml ile kullanılır)
-MYSQL_ROOT_PASSWORD=guclu_sifre_buraya
+# MySQL – Tüm verilerin (görevler, kategoriler, kullanıcılar, kiralar, denetim sonuçları vb.) MySQL'e kaydedilmesi için zorunludur.
+# Backend bu değişkenler tanımlıysa MySQL kullanır; yoksa JSON dosyasına yazar.
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
 MYSQL_DATABASE=planla
 MYSQL_USER=planla_user
 MYSQL_PASSWORD=planla_sifre

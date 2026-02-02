@@ -1,27 +1,40 @@
 // NOT: .env sadece server.js'ten yüklenir (backend/.env). Burada dotenv/config kullanılmaz;
 // aksi halde CWD'deki .env token'ı ezebilir ve 190 hatasına yol açar.
 import axios from 'axios';
-import https from 'https';
 import dns from 'dns';
 
-// VDS/container'da sistem DNS (getaddrinfo) bazen EAI_AGAIN veriyor; Node'un DNS'ini Google DNS ile zorla.
+// VDS/container'da sistem DNS (getaddrinfo) EAI_AGAIN veriyor; istekleri IP üzerinden yapıp getaddrinfo'yu atlıyoruz.
 dns.setServers(['8.8.8.8', '8.8.4.4']);
 
-/** Meta API istekleri için: hostname'i getaddrinfo yerine dns.resolve4 ile çöz (EAI_AGAIN bypass). */
-function metaLookup(hostname, options, callback) {
-    dns.resolve4(hostname, (err, addresses) => {
-        if (err) return callback(err);
-        if (!addresses?.length) return callback(new Error('No address for ' + hostname));
-        const ip = typeof addresses[0] === 'string' ? addresses[0] : addresses[0].address;
-        callback(null, ip, 4);
-    });
+const META_API_HOST = 'graph.facebook.com';
+const WHATSAPP_API_VERSION = process.env.WHATSAPP_API_VERSION || 'v18.0';
+const WHATSAPP_API_TIMEOUT_MS = Number(process.env.WHATSAPP_API_TIMEOUT_MS) || 30000;
+
+const metaBaseUrlCache = { url: null, ts: 0 };
+const META_BASE_URL_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/** Meta API base URL: hostname'i dns.resolve4 (8.8.8.8) ile çözüp https://IP/v18.0 döndürür. getaddrinfo kullanılmaz. */
+async function getMetaApiBaseUrl() {
+    if (metaBaseUrlCache.url && (Date.now() - metaBaseUrlCache.ts < META_BASE_URL_CACHE_TTL_MS)) {
+        return metaBaseUrlCache.url;
+    }
+    const addresses = await dns.promises.resolve4(META_API_HOST);
+    const first = addresses?.[0];
+    const ip = typeof first === 'string' ? first : first?.address;
+    if (!ip) throw new Error('Meta API host çözülemedi: ' + META_API_HOST);
+    metaBaseUrlCache.url = `https://${ip}/${WHATSAPP_API_VERSION}`;
+    metaBaseUrlCache.ts = Date.now();
+    return metaBaseUrlCache.url;
 }
 
-const metaHttpsAgent = new https.Agent({ lookup: metaLookup });
-
-const WHATSAPP_API_VERSION = process.env.WHATSAPP_API_VERSION || 'v18.0';
-const WHATSAPP_API_BASE_URL = `https://graph.facebook.com/${WHATSAPP_API_VERSION}`;
-const WHATSAPP_API_TIMEOUT_MS = Number(process.env.WHATSAPP_API_TIMEOUT_MS) || 30000;
+/** Meta API istekleri için ortak header'lar (Host: graph.facebook.com TLS SNI için zorunlu). */
+function metaHeaders(accessToken) {
+    return {
+        'Host': META_API_HOST,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+    };
+}
 
 class WhatsAppCloudAPI {
     constructor() {
@@ -47,20 +60,15 @@ class WhatsAppCloudAPI {
         }
 
         try {
-            // Phone number bilgilerini al (Meta dokümantasyonu: fields parametresi ile iste)
-            const url = `${WHATSAPP_API_BASE_URL}/${this.phoneNumberId}?fields=display_phone_number,verified_name`;
-            // Debug: hangi token kullanıldığını doğrula (tam değer loglanmaz)
+            const baseUrl = await getMetaApiBaseUrl();
+            const url = `${baseUrl}/${this.phoneNumberId}?fields=display_phone_number,verified_name`;
             const tokenPreview = this.accessToken.length
                 ? `${this.accessToken.slice(0, 6)}...${this.accessToken.slice(-4)} (len=${this.accessToken.length})`
                 : '(boş)';
             console.log('🔍 WhatsApp status isteği:', url, '| token:', tokenPreview);
             const response = await axios.get(url, {
-                headers: {
-                    'Authorization': `Bearer ${this.accessToken}`,
-                    'Content-Type': 'application/json'
-                },
-                timeout: WHATSAPP_API_TIMEOUT_MS,
-                httpsAgent: metaHttpsAgent
+                headers: metaHeaders(this.accessToken),
+                timeout: WHATSAPP_API_TIMEOUT_MS
             });
 
             return {
@@ -136,8 +144,9 @@ class WhatsAppCloudAPI {
         });
 
         try {
+            const baseUrl = await getMetaApiBaseUrl();
             const response = await axios.post(
-                `${WHATSAPP_API_BASE_URL}/${this.phoneNumberId}/messages`,
+                `${baseUrl}/${this.phoneNumberId}/messages`,
                 {
                     messaging_product: 'whatsapp',
                     recipient_type: 'individual',
@@ -149,12 +158,8 @@ class WhatsAppCloudAPI {
                     }
                 },
                 {
-                    headers: {
-                        'Authorization': `Bearer ${this.accessToken}`,
-                        'Content-Type': 'application/json'
-                    },
-                    timeout: WHATSAPP_API_TIMEOUT_MS,
-                    httpsAgent: metaHttpsAgent
+                    headers: metaHeaders(this.accessToken),
+                    timeout: WHATSAPP_API_TIMEOUT_MS
                 }
             );
 
@@ -197,8 +202,9 @@ class WhatsAppCloudAPI {
         }
 
         try {
+            const baseUrl = await getMetaApiBaseUrl();
             const response = await axios.post(
-                `${WHATSAPP_API_BASE_URL}/${this.phoneNumberId}/messages`,
+                `${baseUrl}/${this.phoneNumberId}/messages`,
                 {
                     messaging_product: 'whatsapp',
                     to: formattedNumber,
@@ -212,12 +218,8 @@ class WhatsAppCloudAPI {
                     }
                 },
                 {
-                    headers: {
-                        'Authorization': `Bearer ${this.accessToken}`,
-                        'Content-Type': 'application/json'
-                    },
-                    timeout: WHATSAPP_API_TIMEOUT_MS,
-                    httpsAgent: metaHttpsAgent
+                    headers: metaHeaders(this.accessToken),
+                    timeout: WHATSAPP_API_TIMEOUT_MS
                 }
             );
 

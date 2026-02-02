@@ -23,6 +23,21 @@ services:
       retries: 5
       start_period: 30s
 
+  # MySQL web arayüzü: http://VDS_IP:8080 — Sistem: MySQL, Sunucu: mysql, Kullanıcı/Şifre: .env'deki MYSQL_USER / MYSQL_PASSWORD (veya root/root)
+  adminer:
+    image: adminer:latest
+    container_name: planla-adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: mysql
+    networks:
+      - planla-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+
   backend:
     build:
       context: ./backend
@@ -34,9 +49,7 @@ services:
     # VDS'te getaddrinfo EAI_AGAIN (graph.facebook.com) için: redirect takibi DNS kullanıyor; /etc/hosts ile IP'ye yönlendiriyoruz
     extra_hosts:
       - "graph.facebook.com:157.240.196.17"
-    depends_on:
-      mysql:
-        condition: service_healthy
+    # depends_on kaldırıldı: network_mode: host ile birlikte "networks" çakışmasını önlemek için. Önce mysql'i başlatın: docker compose up -d mysql
     env_file:
       - .env
       - ./backend/.env
@@ -70,7 +83,10 @@ services:
         max-file: "3"
 
 volumes:
+  # Eski volume'u (planla_mysql_data) silip diğerine (planla_mysql-data) geçmek için external kullanıyoruz.
   mysql_data:
+    external: true
+    name: planla_mysql-data
 
 networks:
   planla-network:

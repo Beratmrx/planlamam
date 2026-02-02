@@ -1,31 +1,16 @@
 // NOT: .env sadece server.js'ten yüklenir (backend/.env). Burada dotenv/config kullanılmaz;
 // aksi halde CWD'deki .env token'ı ezebilir ve 190 hatasına yol açar.
 import axios from 'axios';
-import dns from 'dns';
 
-// VDS/container'da sistem DNS (getaddrinfo) EAI_AGAIN veriyor; istekleri IP üzerinden yapıp getaddrinfo'yu atlıyoruz.
-dns.setServers(['8.8.8.8', '8.8.4.4']);
-
+// VDS/container'da getaddrinfo EAI_AGAIN veriyor; dns.resolve4 bile konteyner içinde getaddrinfo'ya düşebiliyor.
+// Bu yüzden hostname çözümlemesi YAPMIYORUZ: doğrudan bilinen IP kullanıyoruz (Host: graph.facebook.com ile).
 const META_API_HOST = 'graph.facebook.com';
 const WHATSAPP_API_VERSION = process.env.WHATSAPP_API_VERSION || 'v18.0';
 const WHATSAPP_API_TIMEOUT_MS = Number(process.env.WHATSAPP_API_TIMEOUT_MS) || 30000;
 
-const metaBaseUrlCache = { url: null, ts: 0 };
-const META_BASE_URL_CACHE_TTL_MS = 5 * 60 * 1000;
-
-/** Meta API base URL: hostname'i dns.resolve4 (8.8.8.8) ile çözüp https://IP/v18.0 döndürür. getaddrinfo kullanılmaz. */
-async function getMetaApiBaseUrl() {
-    if (metaBaseUrlCache.url && (Date.now() - metaBaseUrlCache.ts < META_BASE_URL_CACHE_TTL_MS)) {
-        return metaBaseUrlCache.url;
-    }
-    const addresses = await dns.promises.resolve4(META_API_HOST);
-    const first = addresses?.[0];
-    const ip = typeof first === 'string' ? first : first?.address;
-    if (!ip) throw new Error('Meta API host çözülemedi: ' + META_API_HOST);
-    metaBaseUrlCache.url = `https://${ip}/${WHATSAPP_API_VERSION}`;
-    metaBaseUrlCache.ts = Date.now();
-    return metaBaseUrlCache.url;
-}
+// graph.facebook.com bilinen IP (Meta CDN). Değişirse .env'de META_GRAPH_IP tanımlayın.
+const META_GRAPH_IP = (process.env.META_GRAPH_IP || '157.240.196.17').trim();
+const META_API_BASE_URL = `https://${META_GRAPH_IP}/${WHATSAPP_API_VERSION}`;
 
 /** Meta API istekleri için ortak header'lar (Host: graph.facebook.com TLS SNI için zorunlu). */
 function metaHeaders(accessToken) {
@@ -60,8 +45,7 @@ class WhatsAppCloudAPI {
         }
 
         try {
-            const baseUrl = await getMetaApiBaseUrl();
-            const url = `${baseUrl}/${this.phoneNumberId}?fields=display_phone_number,verified_name`;
+            const url = `${META_API_BASE_URL}/${this.phoneNumberId}?fields=display_phone_number,verified_name`;
             const tokenPreview = this.accessToken.length
                 ? `${this.accessToken.slice(0, 6)}...${this.accessToken.slice(-4)} (len=${this.accessToken.length})`
                 : '(boş)';
@@ -144,9 +128,8 @@ class WhatsAppCloudAPI {
         });
 
         try {
-            const baseUrl = await getMetaApiBaseUrl();
             const response = await axios.post(
-                `${baseUrl}/${this.phoneNumberId}/messages`,
+                `${META_API_BASE_URL}/${this.phoneNumberId}/messages`,
                 {
                     messaging_product: 'whatsapp',
                     recipient_type: 'individual',
@@ -202,9 +185,8 @@ class WhatsAppCloudAPI {
         }
 
         try {
-            const baseUrl = await getMetaApiBaseUrl();
             const response = await axios.post(
-                `${baseUrl}/${this.phoneNumberId}/messages`,
+                `${META_API_BASE_URL}/${this.phoneNumberId}/messages`,
                 {
                     messaging_product: 'whatsapp',
                     to: formattedNumber,

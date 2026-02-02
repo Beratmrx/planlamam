@@ -6,8 +6,10 @@ FROM node:22-slim
 WORKDIR /app
 
 # Package dosyalarını kopyala ve bağımlılıkları yükle
+# NODE_OPTIONS: VDS'te bellek sınırlıysa OOM'u azaltır; npm "Exit handler never called" hatasını önlemeye yardımcı olur
+ENV NODE_OPTIONS=--max-old-space-size=384
 COPY package*.json ./
-RUN npm install --no-audit --no-fund
+RUN npm install --no-audit --no-fund --prefer-offline
 
 # Uygulama dosyalarını kopyala
 COPY . .

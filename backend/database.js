@@ -57,6 +57,16 @@ async function getSettings() {
   return safeJsonParse(row?.json) || {};
 }
 
+async function getCurrentSavedAtForUpdate(conn) {
+  const [rows] = await conn.query(
+    'SELECT json FROM app_settings WHERE `key` = ? LIMIT 1 FOR UPDATE',
+    ['settings']
+  );
+  const row = Array.isArray(rows) && rows.length ? rows[0] : null;
+  const settings = safeJsonParse(row?.json) || {};
+  return Number(settings?.savedAt || 0) || 0;
+}
+
 async function upsertJsonRows(conn, table, items) {
   if (!Array.isArray(items)) return;
 
@@ -120,6 +130,22 @@ export async function saveStorageFormat(payload) {
   const conn = await p.getConnection();
   try {
     await conn.beginTransaction();
+
+    // 🔒 Stale-write koruması:
+    // Frontend, en son okuduğu `savedAt` değerini payload ile göndermeli.
+    // Eğer başka bir client daha yeni veriyi kaydettiyse (savedAt arttıysa),
+    // eski payload'ın DB'yi "ezip silmesini" engelleriz.
+    const currentSavedAt = await getCurrentSavedAtForUpdate(conn);
+    const incomingSavedAt = Number(payload?.savedAt || 0) || 0;
+    if (currentSavedAt > 0) {
+      // savedAt hiç gelmiyorsa bile (0), eski client overwrite edebilir; engelle.
+      if (incomingSavedAt === 0 || incomingSavedAt < currentSavedAt) {
+        const err = new Error('Stale write rejected');
+        err.code = 'STALE_WRITE';
+        err.currentSavedAt = currentSavedAt;
+        throw err;
+      }
+    }
 
     await upsertJsonRows(conn, 'users', payload?.users);
     await upsertJsonRows(conn, 'categories', payload?.categories);

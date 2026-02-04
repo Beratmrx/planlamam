@@ -157,7 +157,7 @@ cd REPO_ADINIZ
 
 1. **Windows'ta WinSCP veya FileZilla indir**
 2. **VDS'e bağlan** (SFTP protokolü ile)
-3. **Proje klasörünü VDS'e kopyala** (örn: `/var/www/planla`)
+3. **Proje klasörünü VDS'e kopyala** (örn: `/root/planla`)
 
 ---
 
@@ -294,7 +294,7 @@ sudo ufw reload
 
    **VDS_PROJECT_PATH:**
    - Name: `VDS_PROJECT_PATH`
-   - Value: Proje yolu (örn: `/var/www/planla`)
+   - Value: Proje yolu (örn: `/root/planla`)
 
 3. **Frontend için şu secret'ları ekle:**
 

@@ -17,15 +17,13 @@ const META_GRAPH_IP = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(rawMetaIp) ? r
 const META_API_BASE_URL = `https://${META_GRAPH_IP}/${WHATSAPP_API_VERSION}`;
 
 /** VDS'te EAI_AGAIN önlemek: graph.facebook.com her zaman META_GRAPH_IP'ye çözümlenir, DNS çağrılmaz. */
-/** IP ile bağlanınca TLS sertifika doğrulaması için SNI/servername = graph.facebook.com zorunlu. */
 const metaHttpsAgent = new https.Agent({
     lookup: (hostname, options, callback) => {
         if (hostname === META_API_HOST) {
             return callback(null, META_GRAPH_IP, 4);
         }
         dns.lookup(hostname, options, callback);
-    },
-    servername: META_API_HOST
+    }
 });
 
 /** Meta API istekleri için ortak header'lar (Host: graph.facebook.com TLS SNI için zorunlu). */

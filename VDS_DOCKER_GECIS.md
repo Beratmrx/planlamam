@@ -83,10 +83,10 @@ O oturuma girip process’i durdurun.
 
 ## 3. Proje Klasörüne Gidin ve Kodu Güncelleyin
 
-Projenin VDS’te nerede olduğunu biliyorsanız (örn. `/var/www/planlamam` veya `/home/ubuntu/planlamam`):
+Projenin VDS’te nerede olduğunu biliyorsanız (örn. `/root/planla`):
 
 ```bash
-cd /var/www/planlamam
+cd /root/planla
 # veya
 # cd /home/ubuntu/planlamam
 ```
@@ -125,7 +125,7 @@ Sonra **oturumu kapatıp tekrar girin** (örn. `exit` → tekrar `ssh`).
 Proje **kök dizininde** (backend’in bir üstünde) `.env` olmalı. `docker-compose.prod.yml` bu dosyayı kullanır.
 
 ```bash
-cd /var/www/planlamam
+cd /root/planla
 nano .env
 ```
 
@@ -210,7 +210,7 @@ Backend’i her push’ta VDS’te otomatik güncellemek için GitHub repo’da:
 | `VDS_HOST`          | VDS IP adresi                   |
 | `VDS_USER`          | SSH kullanıcı adı (root/ubuntu) |
 | `VDS_SSH_KEY`       | SSH private key (tam metni)     |
-| `VDS_PROJECT_PATH`  | Proje yolu (örn. `/var/www/planlamam`) |
+| `VDS_PROJECT_PATH`  | Proje yolu (örn. `/root/planla`)       |
 
 Bundan sonra `main` branch’e push ettiğinizde (özellikle `backend/` veya `docker-compose.prod.yml` değişince) GitHub Actions VDS’e bağlanıp `git pull` + `docker-compose ... up -d --build backend` çalıştırır.
 

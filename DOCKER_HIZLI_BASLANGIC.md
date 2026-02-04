@@ -88,7 +88,7 @@ curl http://localhost:3002/api/whatsapp/status
 - `VDS_USER`: SSH kullanıcı adı
 - `VDS_SSH_KEY`: SSH private key
 - `VDS_SSH_PORT`: SSH port (varsayılan: 22)
-- `VDS_PROJECT_PATH`: Proje yolu (örn: `/var/www/planla`)
+- `VDS_PROJECT_PATH`: Proje yolu (örn: `/root/planla`)
 
 **Frontend için:**
 - `NETLIFY_AUTH_TOKEN`: Netlify auth token

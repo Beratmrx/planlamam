@@ -66,9 +66,9 @@ services:
       - WHATSAPP_WEBHOOK_VERIFY_TOKEN=${WHATSAPP_WEBHOOK_VERIFY_TOKEN:-planla_webhook_token_2024}
       - META_GRAPH_IP=${META_GRAPH_IP:-157.240.196.17}
       - MYSQL_HOST=127.0.0.1
-      - MYSQL_PORT=3307
+      - MYSQL_PORT=${MYSQL_PORT:-3306}
       - MYSQL_DATABASE=${MYSQL_DATABASE:-planla}
-      - MYSQL_USER=${MYSQL_USER:-planla}
+      - MYSQL_USER=${MYSQL_USER:-planla_user}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-planla123}
     healthcheck:
       test: [ "CMD", "node", "-e", "require('http').get('http://localhost:3002/api/whatsapp/status', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" ]

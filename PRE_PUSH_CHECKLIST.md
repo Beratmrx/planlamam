@@ -58,8 +58,8 @@ GitHub'a push ettikten sonra VDS'e SSH ile bağlanıp projeyi güncelleyin:
 # VDS'e bağlan
 ssh KULLANICI@VDS_IP
 
-# Proje klasörüne git (kendi yolunuz: örn. /var/www/planla)
-cd /var/www/planla
+# Proje klasörüne git (VDS: /root/planla)
+cd /root/planla
 
 # Son kodu çek
 git pull origin main

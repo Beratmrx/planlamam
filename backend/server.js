@@ -75,12 +75,63 @@ app.post('/api/storage', async (req, res) => {
     }
     res.json({ success: true, savedAt });
   } catch (error) {
+    // Stale-write (eski payload) koruması: 409 döndür.
+    if (error?.code === 'STALE_WRITE') {
+      return res.status(409).json({
+        success: false,
+        message: 'Eski verilerle kaydetme engellendi. Lütfen sayfayı yenileyin.',
+        currentSavedAt: error.currentSavedAt || null
+      });
+    }
     console.error('❌ Storage yazma hatası:', error);
     res.status(500).json({ success: false, message: 'Storage yazılamadı' });
   }
 });
 
 // WhatsApp Cloud API Endpoints
+
+/**
+ * Sunucu tanı: env yüklü mü, Meta IP'ye (443) erişim var mı.
+ * Local'de çalışıp sunucuda çalışmıyorsa: curl http://SUNUCU:3002/api/whatsapp/diagnose
+ */
+app.get('/api/whatsapp/diagnose', async (req, res) => {
+  const META_IP = process.env.META_GRAPH_IP || '157.240.196.17';
+  const out = {
+    env: {
+      hasToken: !!process.env.WHATSAPP_ACCESS_TOKEN,
+      tokenLength: process.env.WHATSAPP_ACCESS_TOKEN ? process.env.WHATSAPP_ACCESS_TOKEN.length : 0,
+      hasPhoneId: !!process.env.WHATSAPP_PHONE_NUMBER_ID,
+      nodeEnv: process.env.NODE_ENV,
+      metaGraphIp: META_IP
+    },
+    metaReachable: null,
+    metaError: null,
+    statusCheck: null
+  };
+  try {
+    const net = await import('net');
+    await new Promise((resolve, reject) => {
+      const socket = net.createConnection(443, META_IP, () => {
+        socket.destroy();
+        resolve();
+      });
+      socket.setTimeout(5000);
+      socket.on('error', reject);
+      socket.on('timeout', () => { socket.destroy(); reject(new Error('ETIMEDOUT')); });
+    });
+    out.metaReachable = true;
+  } catch (e) {
+    out.metaReachable = false;
+    out.metaError = e.code || e.message || String(e);
+  }
+  try {
+    const status = await whatsappCloudAPI.checkStatus();
+    out.statusCheck = { ready: status.ready, message: status.message, errorCode: status.errorCode };
+  } catch (e) {
+    out.statusCheck = { ready: false, message: e.message, errorCode: e.code };
+  }
+  res.json(out);
+});
 
 /**
  * WhatsApp durumunu kontrol et

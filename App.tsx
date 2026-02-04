@@ -357,6 +357,7 @@ const App: React.FC = () => {
       if (!hasServerData) {
         try {
           const storagePayload = {
+            savedAt: 0,
             users: fallbackData.users,
             categories: fallbackData.categories,
             tasks: fallbackData.tasks,
@@ -423,6 +424,7 @@ const App: React.FC = () => {
     }
     saveTimerRef.current = window.setTimeout(async () => {
       const payload = {
+        savedAt: lastStorageSyncRef.current || 0,
         users,
         categories,
         tasks,
@@ -440,6 +442,20 @@ const App: React.FC = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
+        if (response.status === 409) {
+          // Sunucuda daha yeni veri var; local eskiyse overwrite etmeyelim, server'ı çekelim.
+          try {
+            const freshRes = await fetch(`${BACKEND_URL}/api/storage`);
+            if (freshRes.ok) {
+              const fresh = await freshRes.json();
+              if (fresh?.savedAt) lastStorageSyncRef.current = fresh.savedAt;
+              applyHydratedState(fresh, true);
+            }
+          } catch (e) {
+            console.error('Stale-write sonrası refresh hatası:', e);
+          }
+          return;
+        }
         const resData = await response.json();
         if (resData.success && resData.savedAt) {
           lastStorageSyncRef.current = resData.savedAt;

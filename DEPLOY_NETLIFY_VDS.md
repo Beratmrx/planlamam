@@ -74,13 +74,16 @@ SSH ile VDS’e bağlanın:
 ssh KULLANICI@VDS_IP
 ```
 
-Proje klasörü (örnek: `/var/www/planla`):
+Proje klasörü (VDS örnek: `/root/planla` veya `/var/www/planla`):
 
 ```bash
-sudo mkdir -p /var/www/planla
-sudo chown $USER:$USER /var/www/planla
-cd /var/www/planla
+# Proje kökü /root/planla ise:
+mkdir -p /root/planla
+cd /root/planla
 git clone https://github.com/KULLANICI_ADI/REPO_ADI.git .
+
+# Veya /var/www kullanacaksanız:
+# sudo mkdir -p /var/www/planla && sudo chown $USER:$USER /var/www/planla && cd /var/www/planla && git clone ...
 ```
 
 Docker yüklü değilse (Ubuntu/Debian):
@@ -96,7 +99,7 @@ sudo usermod -aG docker $USER
 Proje kökünde (VDS’te) `.env` oluşturun:
 
 ```bash
-cd /var/www/planla
+cd /root/planla
 nano .env
 ```
 
@@ -127,7 +130,7 @@ Kaydedin (Ctrl+O, Enter, Ctrl+X).
 ### 3.3 İlk Kez Backend + MySQL Çalıştırma
 
 ```bash
-cd /var/www/planla
+cd /root/planla
 docker-compose -f docker-compose.prod.yml up -d
 ```
 
@@ -150,7 +153,7 @@ GitHub repo → **Settings** → **Secrets and variables** → **Actions** → *
 | `VDS_USER`          | SSH kullanıcı adı (örn. `root` veya `ubuntu`) |
 | `VDS_SSH_KEY`       | SSH private key’in tam metni             |
 | `VDS_SSH_PORT`      | (Opsiyonel) SSH port, varsayılan 22       |
-| `VDS_PROJECT_PATH`  | Proje yolu (örn. `/var/www/planla`)      |
+| `VDS_PROJECT_PATH`  | Proje yolu (örn. `/root/planla`)         |
 
 Sonrasında `main` branch’e push yaptığınızda (özellikle `backend/` veya `docker-compose.prod.yml` değişince) GitHub Actions VDS’e SSH ile bağlanıp:
 

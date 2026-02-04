@@ -15,7 +15,7 @@ docker-compose logs -f backend
 # Container'ları durdur
 docker-compose down
 
-# Container'ları durdur ve volume'ları sil
+# Container'ları durdur ve volume'ları sil (YEREL TEST İÇİN - VDS'te KULLANMAYIN; MySQL verisi silinir!)
 docker-compose down -v
 
 # Yeniden build et ve başlat
@@ -30,8 +30,8 @@ docker-compose up -d --build
 # VDS'e bağlan
 ssh kullanici@vds_ip
 
-# Projeye git
-cd /var/www/planla
+# Projeye git (VDS proje kökü: /root/planla)
+cd /root/planla
 
 # Environment ayarla
 cd backend
@@ -48,7 +48,7 @@ docker-compose -f docker-compose.prod.yml logs -f backend
 # Container'ı yeniden başlat
 docker-compose -f docker-compose.prod.yml restart backend
 
-# Container'ı durdur
+# Container'ı durdur (VDS: -v KULLANMAYIN; aksi halde mysql_data silinir ve tüm veritabanı sıfırlanır)
 docker-compose -f docker-compose.prod.yml down
 
 # Güncelleme (Git pull + restart)

@@ -81,15 +81,18 @@ async function upsertJsonRows(conn, table, items) {
     );
   }
 
-  // Delete rows that are not present anymore
-  const ids = items.map(i => i?.id).filter(Boolean).map(String);
-  if (ids.length === 0) {
-    await conn.query(`DELETE FROM \`${table}\``);
-    return;
-  }
-
-  const placeholders = ids.map(() => '?').join(',');
-  await conn.query(`DELETE FROM \`${table}\` WHERE id NOT IN (${placeholders})`, ids);
+  // 🔒 SİLME İŞLEMİ KAPALI: Güvenlik için DELETE yetkisi MySQL'de kaldırıldı.
+  // Eski kayıtlar DB'de kalır; sadece yeni ekleme ve güncelleme yapılır.
+  // Silme işlemi yapılmaz - veri güvenliği için.
+  // 
+  // Eski kod (kaldırıldı):
+  // const ids = items.map(i => i?.id).filter(Boolean).map(String);
+  // if (ids.length === 0) {
+  //   await conn.query(`DELETE FROM \`${table}\``);
+  //   return;
+  // }
+  // const placeholders = ids.map(() => '?').join(',');
+  // await conn.query(`DELETE FROM \`${table}\` WHERE id NOT IN (${placeholders})`, ids);
 }
 
 export async function getStorageFormat() {

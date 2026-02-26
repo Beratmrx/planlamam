@@ -63,9 +63,10 @@ export async function saveStorageFormat(payload) {
 
     await fs.writeFile(STORAGE_FILE, JSON.stringify(dataToSave, null, 2), 'utf8');
     console.log('✅ Storage kaydedildi:', STORAGE_FILE);
-    return true;
+    return now; // Return savedAt timestamp instead of true
   } catch (error) {
     console.error('❌ Storage kaydetme hatası:', error);
     return false;
   }
 }
+

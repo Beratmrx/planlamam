@@ -7,8 +7,7 @@ export interface Task {
   createdAt: number;
   createdByUserId: string;
   assignedToUserId: string;
-  expectedDuration: string;
-  expectedDurationMinutes?: number;
+  expectedDuration?: string; // Kept as optional for backward compatibility if needed, but will be deprecated
   dueAt?: number;
   repeat: 'once' | 'daily';
   lastCompletedDate?: string;
@@ -23,9 +22,11 @@ export interface Task {
   completionPhotoDataUrl?: string;
   isExpired?: boolean;
   scheduledFor?: number; // Timestamp when task becomes active
+  scheduledDate?: string; // YYYY-MM-DD
   reminderStartTime?: string; // HH:mm
   reminderInterval?: number; // Minutes
 }
+
 
 export interface Category {
   id: string;

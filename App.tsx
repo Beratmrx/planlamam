@@ -1,3 +1,4 @@
+// @refresh reload
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Task, Category, User, Rental, AssetItem } from './types';
@@ -9,6 +10,7 @@ type Expense = {
   id: string;
   description: string;
   amount: number;
+  paymentMethod: 'cash' | 'transfer'; // Ödeme yöntemi: nakit veya havale
 };
 
 type AccountEntry = {
@@ -62,7 +64,6 @@ const App: React.FC = () => {
   const [newCategoryColor, setNewCategoryColor] = useState(CATEGORY_COLORS[0]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskAssigneeId, setNewTaskAssigneeId] = useState('');
-  const [newTaskExpectedDuration, setNewTaskExpectedDuration] = useState('01:00');
   const [newTaskRepeat, setNewTaskRepeat] = useState<'once' | 'daily'>('once');
   const [auditOptions, setAuditOptions] = useState<string[]>([]);
   const [selectedAuditOptions, setSelectedAuditOptions] = useState<string[]>([]);
@@ -517,12 +518,21 @@ const App: React.FC = () => {
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
+      const today = new Date(now).toISOString().slice(0, 10);
       setTasks(prev => {
         let changed = false;
         const updated = prev.map(task => {
           if (task.isCompleted || task.isExpired) return task;
-          if (!task.dueAt) return task;
-          if (task.dueAt <= now) {
+          // For now, let's say tasks "expire" if they are from a previous date and not completed
+          // But usually we want them to stay active. Let's make it so they don't expire automatically based on time,
+          // but maybe based on the end of the day if we want.
+          // For this request, I will keep the expiration logic simpler: 
+          // Tasks scheduled for today or earlier are active. 
+          // If a task is "daily", it resets anyway.
+          // If we want to keep the expired view functional, we can say tasks expire after 24 hours of their scheduled time.
+          if (!task.scheduledFor) return task;
+          const oneDayMs = 24 * 60 * 60 * 1000;
+          if (task.scheduledFor + oneDayMs <= now && !task.isCompleted) {
             changed = true;
             return { ...task, isExpired: true };
           }
@@ -530,7 +540,7 @@ const App: React.FC = () => {
         });
         return changed ? updated : prev;
       });
-    }, 30000);
+    }, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -543,34 +553,39 @@ const App: React.FC = () => {
       setTasks(prev => {
         let changed = false;
         const updated = prev.map(task => {
-          if (task.isCompleted) return task;
-          if (!task.dueAt || !task.expectedDurationMinutes) return task;
+          if (task.isCompleted || !task.scheduledFor) return task;
 
-          const remainingMs = task.dueAt - currentTime;
-          const remainingMinutes = Math.ceil(remainingMs / 60000);
-          const thresholds = getReminderThresholds(task.expectedDurationMinutes);
+          // If scheduled time hasn't arrived yet, no reminder
+          if (currentTime < task.scheduledFor) return task;
+
+          const elapsedMs = currentTime - task.scheduledFor;
+          const elapsedMinutes = Math.floor(elapsedMs / 60000);
+          const interval = task.reminderInterval || 30; // Default 30 mins if not specified
+
+          // Remind at 0, interval, 2*interval, etc.
+          const reminderNumber = Math.floor(elapsedMinutes / interval);
           const alreadySent = task.remindersSentMinutes || [];
 
-          const shouldSend = thresholds.find(min => min >= 0 && remainingMinutes <= min && !alreadySent.includes(min));
-          if (!shouldSend) return task;
+          if (!alreadySent.includes(reminderNumber)) {
+            const assignee = users.find(u => u.id === task.assignedToUserId);
+            if (assignee?.phoneNumber) {
+              const message = `⏳ Görev hatırlatması!\n\n📝 ${task.title}\n⏰ Planlanan: ${task.reminderStartTime || '--:--'}\n\nLütfen görevi tamamlayın.`;
+              sendWhatsAppMessage(assignee.phoneNumber, message).catch(error => {
+                console.error('WhatsApp hatırlatma hatası:', error);
+              });
+            }
 
-          const assignee = users.find(u => u.id === task.assignedToUserId);
-          if (assignee?.phoneNumber) {
-            const message = `⏳ Görev süresi yaklaşıyor!\n\n📝 ${task.title}\n📌 Kalan süre: ${shouldSend} dk\n\nLütfen tamamlayın.`;
-            sendWhatsAppMessage(assignee.phoneNumber, message).catch(error => {
-              console.error('WhatsApp hatırlatma hatası:', error);
-            });
+            changed = true;
+            return {
+              ...task,
+              remindersSentMinutes: [...alreadySent, reminderNumber]
+            };
           }
-
-          changed = true;
-          return {
-            ...task,
-            remindersSentMinutes: [...alreadySent, shouldSend]
-          };
+          return task;
         });
         return changed ? updated : prev;
       });
-    }, 30000);
+    }, 60000);
 
     return () => clearInterval(interval);
   }, [tasks, users, whatsAppEnabled, whatsAppReady]);
@@ -583,12 +598,12 @@ const App: React.FC = () => {
         const updated = prev.map(task => {
           if (task.repeat === 'daily' && task.isCompleted && task.lastCompletedDate !== today) {
             changed = true;
-            const durationMinutes = task.expectedDurationMinutes || parseDurationMinutes(task.expectedDuration);
-            const dueAt = durationMinutes > 0 ? Date.now() + durationMinutes * 60 * 1000 : task.dueAt;
+            const newScheduledFor = task.scheduledFor ? new Date(task.scheduledFor).setFullYear(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()) : undefined;
             return {
               ...task,
               isCompleted: false,
-              dueAt,
+              scheduledDate: today,
+              scheduledFor: newScheduledFor ? new Date(newScheduledFor).getTime() : undefined,
               remindersSentMinutes: [],
               completionPhotoDataUrl: undefined
             };
@@ -785,9 +800,11 @@ const App: React.FC = () => {
   }, [assets, assetFilterRoom, assetFilterText]);
   const homeTasks = useMemo(() => {
     let list = visibleByUser;
+    const today = new Date(nowTs).toISOString().slice(0, 10);
     if (homeFilterStatus !== 'all') {
       if (homeFilterStatus === 'active') {
-        list = list.filter(t => !t.isCompleted && !t.isExpired && (!t.scheduledFor || t.scheduledFor <= nowTs));
+        // Active tasks: not completed, not expired, and scheduled for today or earlier
+        list = list.filter(t => !t.isCompleted && !t.isExpired && (!t.scheduledDate || t.scheduledDate <= today));
       } else if (homeFilterStatus === 'completed') {
         list = list.filter(t => t.isCompleted);
       } else if (homeFilterStatus === 'expired') {
@@ -802,7 +819,7 @@ const App: React.FC = () => {
       list = list.filter(t => t.title.toLowerCase().includes(q));
     }
     return list;
-  }, [visibleByUser, homeFilterStatus, homeFilterCategory, homeFilterText]);
+  }, [visibleByUser, homeFilterStatus, homeFilterCategory, homeFilterText, nowTs]);
 
   // Daily Report Calculation
   const dailyReport = useMemo(() => {
@@ -968,10 +985,12 @@ const App: React.FC = () => {
     }
     // Reset task form state
     setNewTaskTitle('');
-    setNewTaskExpectedDuration('01:00');
     setNewTaskRepeat('once');
     setSelectedAuditOptions([]);
     setNewTaskRequiresPhoto(false);
+    setNewTaskScheduled(true);
+    setNewTaskScheduleDate(new Date().toISOString().slice(0, 10));
+    setNewTaskScheduleTime('09:00');
     // Set assignee to current user (don't reset it)
     if (currentUserId && !newTaskAssigneeId) {
       setNewTaskAssigneeId(currentUserId);
@@ -991,22 +1010,29 @@ const App: React.FC = () => {
     setActiveCategoryId(task.categoryId);
     setNewTaskTitle(task.title);
     setNewTaskAssigneeId(task.assignedToUserId);
-    setNewTaskExpectedDuration(task.expectedDuration || '01:00');
     setNewTaskRepeat(task.repeat || 'once');
     setNewTaskRequiresPhoto(Boolean(task.requiresPhoto));
     setSelectedAuditOptions(task.auditItems || []);
+    setNewTaskScheduled(true);
+    if (task.scheduledDate) {
+      setNewTaskScheduleDate(task.scheduledDate);
+    } else if (task.scheduledFor) {
+      setNewTaskScheduleDate(new Date(task.scheduledFor).toISOString().slice(0, 10));
+    }
+    if (task.reminderStartTime) {
+      setNewTaskScheduleTime(task.reminderStartTime);
+    }
     setIsTaskModalOpen(true);
   };
 
   const resetTaskModalState = () => {
     setNewTaskTitle('');
-    setNewTaskExpectedDuration('01:00');
     setNewTaskRepeat('once');
     setSelectedAuditOptions([]);
     setNewTaskRequiresPhoto(false);
-    setNewTaskScheduled(false);
-    setNewTaskScheduleDate('');
-    setNewTaskScheduleTime('');
+    setNewTaskScheduled(true); // Default to scheduled since date is mandatory now
+    setNewTaskScheduleDate(new Date().toISOString().slice(0, 10)); // Default to today
+    setNewTaskScheduleTime('09:00'); // Default time
     setNewTaskReminderStartTime('');
     setNewTaskReminderInterval('');
     setEditingTaskId(null);
@@ -1022,13 +1048,14 @@ const App: React.FC = () => {
     const finalTitle = typeof titleOverride === 'string' ? titleOverride : newTaskTitle;
     const assignedId = newTaskAssigneeId || currentUserId || '';
     const creatorId = currentUserId || assignedId;
-    const durationMinutes = parseDurationMinutes(newTaskExpectedDuration.trim());
     const categoryIdToUse = selectedTaskCategoryId || activeCategoryId;
 
-    if (!finalTitle.trim() || !categoryIdToUse || !assignedId || !creatorId || durationMinutes <= 0) {
-      alert('Lütfen görev adı, kategori, atanan kişi ve beklenen süreyi girin.');
+    if (!finalTitle.trim() || !categoryIdToUse || !assignedId || !creatorId || !newTaskScheduleDate) {
+      alert('Lütfen görev adı, kategori, atanan kişi ve tarih girin.');
       return;
     }
+
+    const scheduledTimestamp = new Date(`${newTaskScheduleDate}T${newTaskScheduleTime || '09:00'}`).getTime();
 
     // Edit mode: only active tasks
     if (editingTaskId) {
@@ -1043,9 +1070,9 @@ const App: React.FC = () => {
         categoryId: categoryIdToUse,
         title: finalTitle.trim(),
         assignedToUserId: assignedId,
-        expectedDuration: newTaskExpectedDuration.trim(),
-        expectedDurationMinutes: durationMinutes,
-        dueAt: Date.now() + durationMinutes * 60 * 1000,
+        scheduledFor: scheduledTimestamp,
+        scheduledDate: newTaskScheduleDate,
+        reminderStartTime: newTaskScheduleTime || undefined,
         repeat: newTaskRepeat,
         auditItems: isAuditCategory ? selectedAuditOptions : [],
         auditResults: [],
@@ -1079,17 +1106,13 @@ const App: React.FC = () => {
       createdAt: now,
       createdByUserId: creatorId,
       assignedToUserId: assignedId,
-      expectedDuration: newTaskExpectedDuration.trim(),
-      expectedDurationMinutes: durationMinutes,
-      dueAt: now + durationMinutes * 60 * 1000,
       repeat: newTaskRepeat,
       auditItems: isAuditCategory ? selectedAuditOptions : [],
       auditResults: [],
       requiresPhoto: !isAuditCategory ? newTaskRequiresPhoto : false,
-      scheduledFor: newTaskScheduled && newTaskScheduleDate && newTaskScheduleTime
-        ? new Date(`${newTaskScheduleDate}T${newTaskScheduleTime}`).getTime()
-        : undefined,
-      reminderStartTime: newTaskReminderStartTime || undefined,
+      scheduledFor: scheduledTimestamp,
+      scheduledDate: newTaskScheduleDate,
+      reminderStartTime: newTaskScheduleTime || undefined,
       reminderInterval: typeof newTaskReminderInterval === 'number' ? newTaskReminderInterval : undefined,
       completionPhotoDataUrl: undefined
     };
@@ -1121,8 +1144,9 @@ const App: React.FC = () => {
     if ((whatsAppEnabled || whatsAppReady) && assignedUser?.phoneNumber) {
       const category = categories.find(c => c.id === categoryIdToUse);
       const repeatLabel = newTaskRepeat === 'daily' ? 'Her gün' : 'Tek sefer';
-      const durationLabel = newTaskExpectedDuration.trim() || '01:00';
-      const message = `📌 Yeni görev atandı!\n\n📝 ${finalTitle.trim()}\n📁 Kategori: ${category?.name || 'Bilinmiyor'}\n⏱️ Süre: ${durationLabel}\n🔁 Tekrar: ${repeatLabel}\n\nLütfen görevi tamamlayın.`;
+      const scheduledDateLabel = newTaskScheduleDate || 'Bugün';
+      const scheduledTimeLabel = newTaskScheduleTime || '09:00';
+      const message = `📌 Yeni görev atandı!\n\n📝 ${finalTitle.trim()}\n📁 Kategori: ${category?.name || 'Bilinmiyor'}\n📅 Tarih: ${scheduledDateLabel}\n⏰ Saat: ${scheduledTimeLabel}\n🔁 Tekrar: ${repeatLabel}\n\nLütfen görevi zamanında tamamlayın.`;
       console.log('📤 WhatsApp mesajı gönderiliyor:', message);
       try {
         const result = await sendWhatsAppMessage(assignedUser.phoneNumber, message);
@@ -1689,13 +1713,40 @@ const App: React.FC = () => {
       return;
     }
 
+    const cash = parseFloat(accountCash) || 0;
+    const pos = parseFloat(accountPos) || 0;
+    const transfer = parseFloat(accountTransfer) || 0;
+
+    // Validate expenses have payment method
+    const validExpenses = accountExpenses.filter(ex => ex.description.trim() && ex.amount > 0);
+
+    // Calculate total expenses by payment method
+    const cashExpenses = validExpenses
+      .filter(ex => ex.paymentMethod === 'cash')
+      .reduce((sum, ex) => sum + ex.amount, 0);
+
+    const transferExpenses = validExpenses
+      .filter(ex => ex.paymentMethod === 'transfer')
+      .reduce((sum, ex) => sum + ex.amount, 0);
+
+    // Check if expenses exceed available amounts
+    if (cashExpenses > cash) {
+      alert(`Nakit giderler (${formatCurrency(cashExpenses)}) nakit tutarından (${formatCurrency(cash)}) fazla olamaz!`);
+      return;
+    }
+
+    if (transferExpenses > transfer) {
+      alert(`Havale giderleri (${formatCurrency(transferExpenses)}) havale tutarından (${formatCurrency(transfer)}) fazla olamaz!`);
+      return;
+    }
+
     const newEntry: AccountEntry = {
       id: activeAccountEntryId || `entry-${Date.now()}`,
       date: accountDate,
-      cash: parseFloat(accountCash) || 0,
-      pos: parseFloat(accountPos) || 0,
-      transfer: parseFloat(accountTransfer) || 0,
-      expenses: accountExpenses,
+      cash,
+      pos,
+      transfer,
+      expenses: validExpenses,
       photos: accountPhotos,
       note: accountNote,
       createdAt: activeAccountEntryId ? (accountEntries.find(e => e.id === activeAccountEntryId)?.createdAt || Date.now()) : Date.now(),
@@ -1773,6 +1824,29 @@ const App: React.FC = () => {
     setActiveAccountEntryId(entry.id);
     setIsAccountDetailModalOpen(true);
   };
+
+  // Expense management helper functions
+  const handleAddExpense = () => {
+    const newExpense: Expense = {
+      id: `expense-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      description: '',
+      amount: 0,
+      paymentMethod: 'cash' // Varsayılan: nakit
+    };
+    setAccountExpenses(prev => [...prev, newExpense]);
+  };
+
+  const handleRemoveExpense = (index: number) => {
+    setAccountExpenses(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleExpenseChange = (index: number, field: keyof Expense, value: any) => {
+    setAccountExpenses(prev => prev.map((expense, i) => {
+      if (i !== index) return expense;
+      return { ...expense, [field]: value };
+    }));
+  };
+
 
   const handleEditFromDetail = () => {
     setIsAccountDetailModalOpen(false);
@@ -3581,12 +3655,11 @@ const App: React.FC = () => {
                     </select>
                   </div>
                   <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Beklenen Süre</label>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Görev Tarihi</label>
                     <input
-                      type="time"
-                      value={newTaskExpectedDuration}
-                      onChange={(e) => setNewTaskExpectedDuration(e.target.value)}
-                      step="60"
+                      type="date"
+                      value={newTaskScheduleDate}
+                      onChange={(e) => setNewTaskScheduleDate(e.target.value)}
                       className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
                     />
                   </div>
@@ -3615,53 +3688,6 @@ const App: React.FC = () => {
                   )}
                 </div>
 
-                {/* Scheduling Section */}
-                <div className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem] space-y-4">
-                  <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-3 text-sm font-black text-slate-600 uppercase tracking-widest cursor-pointer">
-                      <span className="text-xl">📅</span>
-                      <span>İleri Tarihli Planla</span>
-                    </label>
-                    <div className="relative inline-block w-12 h-6 transition duration-200 ease-in-out">
-                      <input
-                        type="checkbox"
-                        id="schedule-toggle"
-                        className="peer absolute opacity-0 w-0 h-0"
-                        checked={newTaskScheduled}
-                        onChange={(e) => setNewTaskScheduled(e.target.checked)}
-                      />
-                      <label
-                        htmlFor="schedule-toggle"
-                        className={`block overflow-hidden h-6 rounded-full cursor-pointer transition-colors duration-200 ${newTaskScheduled ? 'bg-indigo-500' : 'bg-slate-300'}`}
-                      ></label>
-                      <div className={`absolute left-1 bottom-1 bg-white w-4 h-4 rounded-full transition-transform duration-200 ${newTaskScheduled ? 'translate-x-6' : 'translate-x-0'}`}></div>
-                    </div>
-                  </div>
-
-                  {newTaskScheduled && (
-                    <div className="grid grid-cols-2 gap-4 animate-fade-in">
-                      <div>
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Tarih</label>
-                        <input
-                          type="date"
-                          value={newTaskScheduleDate}
-                          onChange={(e) => setNewTaskScheduleDate(e.target.value)}
-                          className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 font-bold text-slate-700"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Başlangıç Saati</label>
-                        <input
-                          type="time"
-                          value={newTaskScheduleTime}
-                          onChange={(e) => setNewTaskScheduleTime(e.target.value)}
-                          className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-indigo-500/10 font-bold text-slate-700"
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
-
                 {/* Reminder Settings */}
                 <div className="p-6 bg-amber-50 border border-amber-100/50 rounded-[2rem] space-y-4">
                   <h4 className="flex items-center gap-2 text-sm font-black text-amber-700 uppercase tracking-widest">
@@ -3669,11 +3695,11 @@ const App: React.FC = () => {
                   </h4>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="text-[10px] font-black text-amber-600/60 uppercase tracking-widest mb-2 block">İlk Hatırlatma</label>
+                      <label className="text-[10px] font-black text-amber-600/60 uppercase tracking-widest mb-2 block">Hatırlatma Saati</label>
                       <input
                         type="time"
-                        value={newTaskReminderStartTime}
-                        onChange={(e) => setNewTaskReminderStartTime(e.target.value)}
+                        value={newTaskScheduleTime}
+                        onChange={(e) => setNewTaskScheduleTime(e.target.value)}
                         className="w-full p-4 bg-white border border-amber-200 rounded-2xl outline-none focus:ring-4 focus:ring-amber-500/10 font-bold text-slate-700"
                       />
                     </div>
@@ -4433,12 +4459,24 @@ const App: React.FC = () => {
 
                   <div className="flex items-center gap-4">
                     <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-xl bg-indigo-100 text-indigo-600">
-                      ⏱️
+                      📅
                     </div>
                     <div>
-                      <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Süre / Tekrar</div>
+                      <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Tarih / Saat</div>
                       <div className="font-bold text-slate-700">
-                        {task.expectedDuration} · {task.repeat === 'daily' ? 'Her Gün' : 'Tek Sefer'}
+                        {task.scheduledDate || 'Belirtilmedi'} · {task.reminderStartTime || '--:--'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-xl bg-indigo-100 text-indigo-600">
+                      🔁
+                    </div>
+                    <div>
+                      <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Tekrar</div>
+                      <div className="font-bold text-slate-700">
+                        {task.repeat === 'daily' ? 'Her Gün' : 'Tek Sefer'}
                       </div>
                     </div>
                   </div>
@@ -4858,7 +4896,204 @@ const App: React.FC = () => {
         )
       }
 
+      {/* Account Entry Modal */}
+      {
+        isAccountModalOpen && (
+          <div className="fixed inset-0 modal-overlay z-[120] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center gap-4 mb-8">
+                <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-emerald-100 text-emerald-600 text-3xl">
+                  💰
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-3xl font-black tracking-tighter text-slate-800">
+                    {activeAccountEntryId ? 'Hesap Kaydını Düzenle' : 'Yeni Hesap Kaydı'}
+                  </h3>
+                  <p className="text-slate-400 font-bold text-sm mt-1">Gelir ve gider bilgilerini girin</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setIsAccountModalOpen(false);
+                    resetAccountForm();
+                  }}
+                  className="w-10 h-10 rounded-2xl flex items-center justify-center text-slate-400 hover:bg-slate-100 transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                {/* Tarih */}
+                <div>
+                  <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Tarih</label>
+                  <input
+                    type="date"
+                    value={accountDate}
+                    onChange={(e) => setAccountDate(e.target.value)}
+                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
+                  />
+                </div>
+
+                {/* Gelirler */}
+                <div className="p-6 bg-emerald-50/50 rounded-3xl border border-emerald-100">
+                  <div className="text-xs font-black uppercase tracking-widest text-emerald-600 mb-4">Gelirler</div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-2">Nakit (₺)</label>
+                      <input
+                        type="number"
+                        value={accountCash}
+                        onChange={(e) => setAccountCash(e.target.value)}
+                        placeholder="0"
+                        className="w-full p-3 bg-white border border-emerald-200 rounded-xl outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-2">POS (₺)</label>
+                      <input
+                        type="number"
+                        value={accountPos}
+                        onChange={(e) => setAccountPos(e.target.value)}
+                        placeholder="0"
+                        className="w-full p-3 bg-white border border-emerald-200 rounded-xl outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-2">Havale (₺)</label>
+                      <input
+                        type="number"
+                        value={accountTransfer}
+                        onChange={(e) => setAccountTransfer(e.target.value)}
+                        placeholder="0"
+                        className="w-full p-3 bg-white border border-emerald-200 rounded-xl outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Giderler */}
+                <div className="p-6 bg-rose-50/50 rounded-3xl border border-rose-100">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-xs font-black uppercase tracking-widest text-rose-600">Giderler</div>
+                    <button
+                      onClick={handleAddExpense}
+                      className="px-4 py-2 bg-rose-600 text-white rounded-xl font-bold text-xs hover:bg-rose-700 transition-colors"
+                    >
+                      + Gider Ekle
+                    </button>
+                  </div>
+
+                  {accountExpenses.length === 0 ? (
+                    <div className="text-center py-8 text-slate-400 font-bold text-sm">
+                      Henüz gider eklenmedi
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {accountExpenses.map((expense, index) => (
+                        <div key={expense.id} className="flex gap-3 items-start p-4 bg-white rounded-2xl border border-rose-200">
+                          <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <input
+                              type="text"
+                              value={expense.description}
+                              onChange={(e) => handleExpenseChange(index, 'description', e.target.value)}
+                              placeholder="Açıklama"
+                              className="p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-600 font-bold text-slate-600 text-sm"
+                            />
+                            <input
+                              type="number"
+                              value={expense.amount || ''}
+                              onChange={(e) => handleExpenseChange(index, 'amount', parseFloat(e.target.value) || 0)}
+                              placeholder="Tutar (₺)"
+                              className="p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-600 font-bold text-slate-600 text-sm"
+                            />
+                            <select
+                              value={expense.paymentMethod}
+                              onChange={(e) => handleExpenseChange(index, 'paymentMethod', e.target.value)}
+                              className="p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-600 font-bold text-slate-600 text-sm"
+                            >
+                              <option value="cash">💵 Nakit</option>
+                              <option value="transfer">🏦 Havale</option>
+                            </select>
+                          </div>
+                          <button
+                            onClick={() => handleRemoveExpense(index)}
+                            className="w-10 h-10 flex items-center justify-center text-rose-400 hover:text-rose-600 hover:bg-rose-100 rounded-xl transition-colors"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Not */}
+                <div>
+                  <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Not (Opsiyonel)</label>
+                  <textarea
+                    value={accountNote}
+                    onChange={(e) => setAccountNote(e.target.value)}
+                    placeholder="Ek bilgiler..."
+                    rows={3}
+                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600 resize-none"
+                  />
+                </div>
+
+                {/* Fotoğraflar */}
+                <div>
+                  <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Fotoğraflar</label>
+                  <div className="flex flex-wrap gap-3">
+                    {accountPhotos.map((photo, index) => (
+                      <div key={index} className="relative w-24 h-24 rounded-2xl overflow-hidden border-2 border-slate-200">
+                        <img src={photo} alt={`Photo ${index + 1}`} className="w-full h-full object-cover" />
+                        <button
+                          onClick={() => setAccountPhotos(prev => prev.filter((_, i) => i !== index))}
+                          className="absolute top-1 right-1 w-6 h-6 bg-rose-500 text-white rounded-lg text-xs flex items-center justify-center hover:bg-rose-600"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                    {accountPhotos.length < 2 && (
+                      <label className="w-24 h-24 rounded-2xl border-2 border-dashed border-slate-300 flex items-center justify-center cursor-pointer hover:border-emerald-500 hover:bg-emerald-50 transition-colors">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleAccountPhotoUpload}
+                          className="hidden"
+                        />
+                        <span className="text-3xl text-slate-400">📷</span>
+                      </label>
+                    )}
+                  </div>
+                </div>
+
+                {/* Buttons */}
+                <div className="flex gap-4 pt-4">
+                  <button
+                    onClick={() => {
+                      setIsAccountModalOpen(false);
+                      resetAccountForm();
+                    }}
+                    className="flex-1 py-4 font-black text-slate-400 hover:text-slate-600 uppercase text-xs tracking-widest transition-colors"
+                  >
+                    İptal
+                  </button>
+                  <button
+                    onClick={handleAddAccountEntry}
+                    className="flex-[2] py-4 bg-emerald-600 text-white rounded-[2rem] font-black shadow-xl shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all uppercase text-xs tracking-widest"
+                  >
+                    {activeAccountEntryId ? 'Güncelle' : 'Kaydet'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      }
+
       {/* Success Notification Popup */}
+
       {
         successNotification.show && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 pointer-events-none">

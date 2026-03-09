@@ -79,3 +79,18 @@ export interface AppState {
   categories: Category[];
   tasks: Task[];
 }
+
+export type PaymentMethod = 'cash' | 'pos' | 'transfer';
+export type TransactionType = 'income' | 'expense';
+
+export interface Transaction {
+  id: string;
+  type: TransactionType;
+  date: string; // YYYY-MM-DD
+  description: string;
+  amount: number;
+  paymentMethod: PaymentMethod;
+  photos: string[]; // Base64 data URLs
+  createdAt: number;
+  createdByUserId: string;
+}

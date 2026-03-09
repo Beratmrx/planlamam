@@ -1,30 +1,10 @@
 // @refresh reload
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Task, Category, User, Rental, AssetItem } from './types';
+import { Task, Category, User, Rental, AssetItem, Transaction, TransactionType, PaymentMethod } from './types';
 import { DEFAULT_CATEGORIES, CATEGORY_COLORS, CATEGORY_ICONS } from './constants';
 import { PlusIcon, TrashIcon, SparklesIcon, CheckIcon } from './components/Icons';
 import { initializeWhatsApp, getWhatsAppStatus, sendWhatsAppMessage, logoutWhatsApp } from './services/whatsappService';
-
-type Expense = {
-  id: string;
-  description: string;
-  amount: number;
-  paymentMethod: 'cash' | 'transfer'; // Ödeme yöntemi: nakit veya havale
-};
-
-type AccountEntry = {
-  id: string;
-  date: string;
-  cash: number;
-  pos: number;
-  transfer: number;
-  expenses: Expense[];
-  photos: string[]; // Base64
-  note?: string;
-  createdAt: number;
-  createdByUserId: string;
-};
 
 const ENV_BACKEND_URL = (import.meta as any).env?.VITE_BACKEND_URL as string | undefined;
 const inferredHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
@@ -36,6 +16,77 @@ const isDockerEnv = Boolean(ENV_BACKEND_URL && ENV_BACKEND_URL.includes('backend
 const isSameOriginProxy = typeof window !== 'undefined' && ENV_BACKEND_URL && (window.location.origin === ENV_BACKEND_URL.replace(/\/$/, ''));
 // Eğer env localhost ise ve siteyi IP ile açıyorsak (telefon vb.), backend URL'i otomatik IP:3002 olur.
 const BACKEND_URL = isDockerEnv || isSameOriginProxy ? '' : (!ENV_BACKEND_URL || isLocalEnvUrl ? INFERRED_BACKEND_URL : ENV_BACKEND_URL);
+
+const migrateAccountEntries = (entries: any[]): Transaction[] => {
+  const transactions: Transaction[] = [];
+  entries.forEach(entry => {
+    // Determine active photos to attach only once to the first created transaction
+    let photosAttached = false;
+    const getPhotos = () => {
+      if (!photosAttached) {
+        photosAttached = true;
+        return entry.photos || [];
+      }
+      return [];
+    };
+
+    if (entry.cashIncome > 0) {
+      transactions.push({
+        id: `tx-mig-cash-${entry.id || Date.now()}`,
+        type: 'income',
+        date: entry.date,
+        description: 'Günlük Nakit Gelir (Eski)',
+        amount: Number(entry.cashIncome),
+        paymentMethod: 'cash',
+        photos: getPhotos(),
+        createdAt: Date.now(),
+        createdByUserId: 'user-admin'
+      });
+    }
+    if (entry.posIncome > 0) {
+      transactions.push({
+        id: `tx-mig-pos-${entry.id || Date.now()}`,
+        type: 'income',
+        date: entry.date,
+        description: 'Günlük POS Gelir (Eski)',
+        amount: Number(entry.posIncome),
+        paymentMethod: 'pos',
+        photos: getPhotos(),
+        createdAt: Date.now(),
+        createdByUserId: 'user-admin'
+      });
+    }
+    if (entry.transferIncome > 0) {
+      transactions.push({
+        id: `tx-mig-trans-${entry.id || Date.now()}`,
+        type: 'income',
+        date: entry.date,
+        description: 'Günlük Havale Gelir (Eski)',
+        amount: Number(entry.transferIncome),
+        paymentMethod: 'transfer',
+        photos: getPhotos(),
+        createdAt: Date.now(),
+        createdByUserId: 'user-admin'
+      });
+    }
+    if (Array.isArray(entry.expenses)) {
+      entry.expenses.forEach((exp: any, idx: number) => {
+        transactions.push({
+          id: `tx-mig-exp-${entry.id}-${idx}`,
+          type: 'expense',
+          date: entry.date,
+          description: exp.description || 'Eski Gider',
+          amount: Number(exp.amount),
+          paymentMethod: 'cash',
+          photos: [],
+          createdAt: Date.now(),
+          createdByUserId: 'user-admin'
+        });
+      });
+    }
+  });
+  return transactions;
+};
 
 const App: React.FC = () => {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -50,7 +101,7 @@ const App: React.FC = () => {
   const [activeSection, setActiveSection] = useState<'home' | 'tasks' | 'rentals' | 'assets' | 'account'>('home');
   const [rentals, setRentals] = useState<Rental[]>([]);
   const [assets, setAssets] = useState<AssetItem[]>([]);
-  const [accountEntries, setAccountEntries] = useState<AccountEntry[]>([]);
+  const [accountTransactions, setAccountTransactions] = useState<Transaction[]>([]);
 
   // UI States
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
@@ -123,14 +174,16 @@ const App: React.FC = () => {
 
   // Account States
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
-  const [activeAccountEntryId, setActiveAccountEntryId] = useState<string | null>(null);
-  const [accountDate, setAccountDate] = useState(new Date().toISOString().slice(0, 10));
-  const [accountCash, setAccountCash] = useState('');
-  const [accountPos, setAccountPos] = useState('');
-  const [accountTransfer, setAccountTransfer] = useState('');
-  const [accountNote, setAccountNote] = useState('');
-  const [accountExpenses, setAccountExpenses] = useState<Expense[]>([]);
-  const [accountPhotos, setAccountPhotos] = useState<string[]>([]);
+  const [activeTransactionId, setActiveTransactionId] = useState<string | null>(null);
+  const [transactionType, setTransactionType] = useState<TransactionType>('expense');
+  const [transactionDate, setTransactionDate] = useState(new Date().toISOString().slice(0, 10));
+  const [transactionDescription, setTransactionDescription] = useState('');
+  const [transactionAmount, setTransactionAmount] = useState('');
+  const [incomeCashAmount, setIncomeCashAmount] = useState('');
+  const [incomePosAmount, setIncomePosAmount] = useState('');
+  const [incomeTransferAmount, setIncomeTransferAmount] = useState('');
+  const [transactionPaymentMethod, setTransactionPaymentMethod] = useState<PaymentMethod>('cash');
+  const [transactionPhotos, setTransactionPhotos] = useState<string[]>([]);
   const [accountFilterStart, setAccountFilterStart] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 1);
@@ -138,6 +191,7 @@ const App: React.FC = () => {
   });
   const [accountFilterEnd, setAccountFilterEnd] = useState(new Date().toISOString().slice(0, 10));
   const [isAccountDetailModalOpen, setIsAccountDetailModalOpen] = useState(false);
+  const [activeDetailTransactionId, setActiveDetailTransactionId] = useState<string | null>(null);
   const [isConfirmActionModalOpen, setIsConfirmActionModalOpen] = useState(false);
   const [confirmActionCallback, setConfirmActionCallback] = useState<(() => void) | null>(null);
   const [confirmActionMessage, setConfirmActionMessage] = useState('');
@@ -241,7 +295,7 @@ const App: React.FC = () => {
     const savedAuditOptions = localStorage.getItem('planla_audit_options_v1');
     const savedRentals = localStorage.getItem('planla_rentals_v1');
     const savedAssets = localStorage.getItem('planla_assets_v1');
-    const savedAccountEntries = localStorage.getItem('planla_account_entries_v1');
+    const savedAccountTransactions = localStorage.getItem('planla_account_transactions_v1');
 
     let initialUsers: User[] = [];
     if (savedUsers) {
@@ -267,7 +321,16 @@ const App: React.FC = () => {
     const auditOptions = savedAuditOptions ? JSON.parse(savedAuditOptions) : [];
     const rentals = savedRentals ? JSON.parse(savedRentals) : [];
     const assets = savedAssets ? JSON.parse(savedAssets) : [];
-    const accountEntries = savedAccountEntries ? JSON.parse(savedAccountEntries) : [];
+    const savedAccountEntries = localStorage.getItem('planla_account_entries_v1');
+    let accountTransactions = savedAccountTransactions ? JSON.parse(savedAccountTransactions) : [];
+    if (!accountTransactions.length && savedAccountEntries) {
+      try {
+        const oldEntries = JSON.parse(savedAccountEntries);
+        accountTransactions = migrateAccountEntries(Array.isArray(oldEntries) ? oldEntries : []);
+      } catch (e) {
+        console.error("Migration error locally", e);
+      }
+    }
 
     return {
       users: normalizedUsers,
@@ -281,7 +344,7 @@ const App: React.FC = () => {
       auditOptions: Array.isArray(auditOptions) ? auditOptions : [],
       rentals: Array.isArray(rentals) ? rentals : [],
       assets: Array.isArray(assets) ? assets : [],
-      accountEntries: Array.isArray(accountEntries) ? accountEntries : [],
+      accountTransactions: Array.isArray(accountTransactions) ? accountTransactions : [],
       activeSection: 'home'
     };
   };
@@ -314,7 +377,11 @@ const App: React.FC = () => {
     setAuditOptions(Array.isArray(data?.auditOptions) ? data.auditOptions : []);
     setRentals(Array.isArray(data?.rentals) ? data.rentals : []);
     setAssets(Array.isArray(data?.assets) ? data.assets : []);
-    setAccountEntries(Array.isArray(data?.accountEntries) ? data.accountEntries : []);
+    let hydratedTransactions = Array.isArray(data?.accountTransactions) ? data.accountTransactions : [];
+    if (!hydratedTransactions.length && Array.isArray(data?.accountEntries)) {
+      hydratedTransactions = migrateAccountEntries(data.accountEntries);
+    }
+    setAccountTransactions(hydratedTransactions);
 
     // FIX: Don't reset active section during background sync to avoid interrupting user
     if (!isBackgroundSync) {
@@ -368,7 +435,7 @@ const App: React.FC = () => {
             auditOptions: fallbackData.auditOptions,
             rentals: fallbackData.rentals,
             assets: fallbackData.assets,
-            accountEntries: fallbackData.accountEntries
+            accountTransactions: fallbackData.accountTransactions
           };
           await fetch(`${BACKEND_URL}/api/storage`, {
             method: 'POST',
@@ -435,7 +502,7 @@ const App: React.FC = () => {
         auditOptions,
         rentals,
         assets,
-        accountEntries
+        accountTransactions
       };
       try {
         const response = await fetch(`${BACKEND_URL}/api/storage`, {
@@ -485,7 +552,7 @@ const App: React.FC = () => {
     auditOptions,
     rentals,
     assets,
-    accountEntries,
+    accountTransactions,
     activeSection,
     isHydrated
   ]);
@@ -651,10 +718,22 @@ const App: React.FC = () => {
         return changed ? updated : prev;
       });
 
-      if (!(whatsAppEnabled || whatsAppReady)) return;
+      if (!whatsAppReady) return;
 
       for (const rental of reminders) {
-        const message = `⚠️ ${rental.unitNumber} dairesi (${rental.tenantName}) kirası 3 gündür gecikmede.`;
+        const nowCalc = new Date();
+        const dueDateCalc = getDueDateForMonth(nowCalc.getFullYear(), nowCalc.getMonth(), rental.dueDay);
+        const overdueDays = Math.floor((nowCalc.getTime() - dueDateCalc.getTime()) / (24 * 60 * 60 * 1000));
+
+        const message =
+          `🚨 KİRA GECİKME UYARISI\n\n` +
+          `🏠 Daire: ${rental.unitNumber}\n` +
+          `👤 Kiracı: ${rental.tenantName}\n` +
+          `📅 Kira Günü: Her ayın ${rental.dueDay}. günü\n` +
+          `💰 Kira Tutarı: ${rental.amount.toLocaleString('tr-TR')} ₺\n` +
+          `⏳ Gecikme: ${overdueDays} gündür ödenmedi\n\n` +
+          `Lütfen kiracıyı hatırlatın veya ödeme alın.`;
+
         try {
           await sendNotificationMessage(message);
         } catch (error) {
@@ -1707,160 +1786,16 @@ const App: React.FC = () => {
     setAssets(prev => prev.filter(item => item.id !== assetId));
   };
 
-  const handleAddAccountEntry = () => {
-    if (!accountCash && !accountPos && !accountTransfer && accountExpenses.length === 0) {
-      alert('Lütfen en az bir gelir veya gider girin.');
-      return;
-    }
-
-    const cash = parseFloat(accountCash) || 0;
-    const pos = parseFloat(accountPos) || 0;
-    const transfer = parseFloat(accountTransfer) || 0;
-
-    // Validate expenses have payment method
-    const validExpenses = accountExpenses.filter(ex => ex.description.trim() && ex.amount > 0);
-
-    // Calculate total expenses by payment method
-    const cashExpenses = validExpenses
-      .filter(ex => ex.paymentMethod === 'cash')
-      .reduce((sum, ex) => sum + ex.amount, 0);
-
-    const transferExpenses = validExpenses
-      .filter(ex => ex.paymentMethod === 'transfer')
-      .reduce((sum, ex) => sum + ex.amount, 0);
-
-    // Check if expenses exceed available amounts
-    if (cashExpenses > cash) {
-      alert(`Nakit giderler (${formatCurrency(cashExpenses)}) nakit tutarından (${formatCurrency(cash)}) fazla olamaz!`);
-      return;
-    }
-
-    if (transferExpenses > transfer) {
-      alert(`Havale giderleri (${formatCurrency(transferExpenses)}) havale tutarından (${formatCurrency(transfer)}) fazla olamaz!`);
-      return;
-    }
-
-    const newEntry: AccountEntry = {
-      id: activeAccountEntryId || `entry-${Date.now()}`,
-      date: accountDate,
-      cash,
-      pos,
-      transfer,
-      expenses: validExpenses,
-      photos: accountPhotos,
-      note: accountNote,
-      createdAt: activeAccountEntryId ? (accountEntries.find(e => e.id === activeAccountEntryId)?.createdAt || Date.now()) : Date.now(),
-      createdByUserId: currentUser?.id || 'unknown'
-    };
-
-    if (activeAccountEntryId) {
-      setAccountEntries(prev => prev.map(e => e.id === activeAccountEntryId ? newEntry : e));
-      showSuccessNotification('Hesap kaydı güncellendi! 💰', '✅');
-    } else {
-      setAccountEntries(prev => [...prev, newEntry]);
-      showSuccessNotification('Hesap kaydı eklendi! 💰', '✅');
-    }
-
-    setIsAccountModalOpen(false);
-    resetAccountForm();
-  };
-
-  const deleteAccountEntry = (id: string, e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    if (currentUser?.role !== 'admin') {
-      alert('Sadece admin silebilir.');
-      return;
-    }
-    if (confirm('Bu kaydı silmek istediğinize emin misiniz?')) {
-      setAccountEntries(prev => prev.filter(e => e.id !== id));
-    }
-  };
-
-  const resetAccountForm = () => {
-    setActiveAccountEntryId(null);
-    setAccountDate(new Date().toISOString().slice(0, 10));
-    setAccountCash('');
-    setAccountPos('');
-    setAccountTransfer('');
-    setAccountExpenses([]);
-    setAccountPhotos([]);
-    setAccountNote('');
-  };
-
-  const openAccountModal = (entry?: AccountEntry) => {
-    if (entry) {
-      setActiveAccountEntryId(entry.id);
-      setAccountDate(entry.date);
-      setAccountCash(entry.cash ? entry.cash.toString() : '');
-      setAccountPos(entry.pos ? entry.pos.toString() : '');
-      setAccountTransfer(entry.transfer ? entry.transfer.toString() : '');
-      setAccountExpenses(entry.expenses || []);
-      setAccountPhotos(entry.photos || []);
-      setAccountNote(entry.note || '');
-    } else {
-      resetAccountForm();
-    }
-    setIsAccountModalOpen(true);
-  };
-
-  const handleAccountPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (accountPhotos.length >= 2) {
-      alert('En fazla 2 fotoğraf yükleyebilirsiniz.');
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setAccountPhotos(prev => [...prev, reader.result as string]);
-    };
-    reader.readAsDataURL(file);
-    reader.readAsDataURL(file);
-  };
-
-  const openAccountDetailModal = (entry: AccountEntry) => {
-    setActiveAccountEntryId(entry.id);
+  const openAccountDetailModal = (transaction: Transaction) => {
+    setActiveDetailTransactionId(transaction.id);
     setIsAccountDetailModalOpen(true);
   };
 
-  // Expense management helper functions
-  const handleAddExpense = () => {
-    const newExpense: Expense = {
-      id: `expense-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      description: '',
-      amount: 0,
-      paymentMethod: 'cash' // Varsayılan: nakit
-    };
-    setAccountExpenses(prev => [...prev, newExpense]);
-  };
-
-  const handleRemoveExpense = (index: number) => {
-    setAccountExpenses(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleExpenseChange = (index: number, field: keyof Expense, value: any) => {
-    setAccountExpenses(prev => prev.map((expense, i) => {
-      if (i !== index) return expense;
-      return { ...expense, [field]: value };
-    }));
-  };
-
-
-  const handleEditFromDetail = () => {
-    setIsAccountDetailModalOpen(false);
-    const entry = accountEntries.find(e => e.id === activeAccountEntryId);
-    if (entry) {
-      openAccountModal(entry);
-    }
-  };
-
   const handleDeleteWithConfirm = () => {
-    if (!activeAccountEntryId) return;
-    setConfirmActionMessage('Bu hesap kaydını silmek istediğinize emin misiniz?');
+    if (!activeDetailTransactionId) return;
+    setConfirmActionMessage('Bu işlemi silmek istediğinize emin misiniz?');
     setConfirmActionCallback(() => () => {
-      deleteAccountEntry(activeAccountEntryId);
+      deleteTransaction(activeDetailTransactionId);
       setIsAccountDetailModalOpen(false);
       setIsConfirmActionModalOpen(false);
     });
@@ -1919,6 +1854,173 @@ const App: React.FC = () => {
       </div>
     );
   }
+
+  // --- Transaction Handlers ---
+  const openTransactionModal = (type: TransactionType = 'expense') => {
+    setActiveTransactionId(null);
+    setTransactionType(type);
+    setTransactionDate(new Date().toISOString().slice(0, 10));
+    setTransactionDescription('');
+    setTransactionAmount('');
+    setIncomeCashAmount('');
+    setIncomePosAmount('');
+    setIncomeTransferAmount('');
+    setTransactionPaymentMethod('cash');
+    setTransactionPhotos([]);
+    setIsAccountModalOpen(true);
+  };
+
+  const resetTransactionForm = () => {
+    setActiveTransactionId(null);
+    setTransactionDescription('');
+    setTransactionAmount('');
+    setIncomeCashAmount('');
+    setIncomePosAmount('');
+    setIncomeTransferAmount('');
+    setTransactionPhotos([]);
+  };
+
+  const handleAddTransaction = () => {
+    if (!transactionDate || (!transactionDescription.trim())) {
+      alert('Lütfen tarih ve açıklama alanlarını doldurun.');
+      return;
+    }
+
+    const transactionsToAdd: Transaction[] = [];
+    const baseTransaction = {
+      date: transactionDate,
+      description: transactionDescription.trim(),
+      photos: transactionPhotos,
+      createdByUserId: currentUser?.id || 'unknown'
+    };
+
+    if (transactionType === 'income' && !activeTransactionId) {
+      // Batch mode
+      const cashNum = parseFloat(incomeCashAmount.replace(',', '.'));
+      const posNum = parseFloat(incomePosAmount.replace(',', '.'));
+      const transferNum = parseFloat(incomeTransferAmount.replace(',', '.'));
+
+      if (!cashNum && !posNum && !transferNum) {
+        alert('Lütfen en az bir gelir tutarı (Nakit, POS veya Havale) girin.');
+        return;
+      }
+
+      // Fotoğraflar sadece ilk oluşturulan işleme eklenir
+      let photosAttached = false;
+      const getPhotos = () => {
+        if (!photosAttached) { photosAttached = true; return transactionPhotos; }
+        return [];
+      };
+
+      if (cashNum > 0) {
+        transactionsToAdd.push({
+          id: `tx-${Date.now()}-cash`,
+          type: 'income',
+          amount: cashNum,
+          paymentMethod: 'cash',
+          createdAt: Date.now(),
+          ...baseTransaction,
+          photos: getPhotos()
+        });
+      }
+      if (posNum > 0) {
+        transactionsToAdd.push({
+          id: `tx-${Date.now()}-pos`,
+          type: 'income',
+          amount: posNum,
+          paymentMethod: 'pos',
+          createdAt: Date.now() + 1,
+          ...baseTransaction,
+          photos: getPhotos()
+        });
+      }
+      if (transferNum > 0) {
+        transactionsToAdd.push({
+          id: `tx-${Date.now()}-transfer`,
+          type: 'income',
+          amount: transferNum,
+          paymentMethod: 'transfer',
+          createdAt: Date.now() + 2,
+          ...baseTransaction,
+          photos: getPhotos()
+        });
+      }
+    } else {
+      // Single mode (Expense or Edit)
+      const amountNum = parseFloat(transactionAmount.replace(',', '.'));
+      if (isNaN(amountNum) || amountNum <= 0) {
+        alert('Lütfen geçerli bir tutar girin.');
+        return;
+      }
+      transactionsToAdd.push({
+        id: activeTransactionId || `tx-${Date.now()}`,
+        type: transactionType,
+        amount: amountNum,
+        paymentMethod: transactionPaymentMethod,
+        createdAt: activeTransactionId ? (accountTransactions.find(t => t.id === activeTransactionId)?.createdAt || Date.now()) : Date.now(),
+        ...baseTransaction
+      });
+    }
+
+    if (activeTransactionId) {
+      setAccountTransactions(prev => prev.map(t => t.id === activeTransactionId ? transactionsToAdd[0] : t));
+      showSuccessNotification('İşlem güncellendi! 💰', '✅');
+    } else {
+      setAccountTransactions(prev => [...prev, ...transactionsToAdd]);
+      showSuccessNotification('İşlem eklendi! 💰', '✅');
+    }
+
+    setIsAccountModalOpen(false);
+    resetTransactionForm();
+  };
+
+  const handleTransactionPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    const newPhotos: string[] = [];
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === 'string') {
+          newPhotos.push(reader.result);
+          if (newPhotos.length === files.length) {
+            setTransactionPhotos(prev => [...prev, ...newPhotos]);
+          }
+        }
+      };
+      reader.readAsDataURL(file as Blob);
+    });
+  };
+
+  const deleteTransaction = (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (currentUser?.role !== 'admin') {
+      alert('Sadece admin silebilir.');
+      return;
+    }
+    setAccountTransactions(prev => prev.filter(t => t.id !== id));
+    setIsAccountDetailModalOpen(false); // Close detail modal if open
+  };
+
+  const handleEditFromDetail = () => {
+    const tx = accountTransactions.find(t => t.id === activeDetailTransactionId);
+    if (!tx) return;
+
+    if (currentUser?.role !== 'admin' && currentUser?.id !== tx.createdByUserId) {
+      alert('Sadece kendi işlemlerinizi düzenleyebilirsiniz.');
+      return;
+    }
+
+    setActiveTransactionId(tx.id);
+    setTransactionType(tx.type);
+    setTransactionDate(tx.date);
+    setTransactionDescription(tx.description);
+    setTransactionAmount(tx.amount.toString());
+    setTransactionPaymentMethod(tx.paymentMethod);
+    setTransactionPhotos(tx.photos || []);
+    setIsAccountDetailModalOpen(false);
+    setIsAccountModalOpen(true);
+  };
 
   return (
     <div className="min-h-[100dvh] w-full overflow-x-hidden app-bg text-slate-900">
@@ -2828,13 +2930,13 @@ const App: React.FC = () => {
                           <div className="flex items-center gap-2 mt-2">
                             <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
                             <p className="text-slate-400 font-black text-[9px] uppercase tracking-[0.2em] whitespace-nowrap">
-                              {accountEntries.filter(e => e.date >= accountFilterStart && e.date <= accountFilterEnd).length} kayıt
+                              {accountTransactions.filter(e => e.date >= accountFilterStart && e.date <= accountFilterEnd).length} kayıt
                             </p>
                           </div>
                         </div>
                       </div>
                       <button
-                        onClick={() => openAccountModal()}
+                        onClick={() => openTransactionModal('income')}
                         className="group flex items-center gap-4 px-10 py-6 bg-gradient-to-r from-indigo-500 via-purple-500 to-fuchsia-500 text-white rounded-[2rem] font-black shadow-2xl hover:opacity-95 transition-all active:scale-95 shadow-indigo-200 btn-glow"
                       >
                         <PlusIcon className="group-hover:rotate-90 transition-transform w-5 h-5" />
@@ -2873,133 +2975,207 @@ const App: React.FC = () => {
 
                   {/* Summary Cards */}
                   {(() => {
-                    const filtered = accountEntries.filter(e => e.date >= accountFilterStart && e.date <= accountFilterEnd);
-                    const totalCash = filtered.reduce((sum, e) => sum + (e.cash || 0), 0);
-                    const totalPos = filtered.reduce((sum, e) => sum + (e.pos || 0), 0);
-                    const totalTransfer = filtered.reduce((sum, e) => sum + (e.transfer || 0), 0);
-                    const totalIncome = totalCash + totalPos + totalTransfer;
-                    const totalExpense = filtered.reduce((sum, e) => sum + (e.expenses?.reduce((s, ex) => s + (ex.amount || 0), 0) || 0), 0);
+                    const filtered = accountTransactions.filter(t => t.date >= accountFilterStart && t.date <= accountFilterEnd);
+
+                    let totalCashIncome = 0;
+                    let totalPosIncome = 0;
+                    let totalTransferIncome = 0;
+                    let totalCashExpense = 0;
+                    let totalTransferExpense = 0;
+
+                    filtered.forEach(t => {
+                      if (t.type === 'income') {
+                        if (t.paymentMethod === 'cash') totalCashIncome += t.amount;
+                        else if (t.paymentMethod === 'pos') totalPosIncome += t.amount;
+                        else if (t.paymentMethod === 'transfer') totalTransferIncome += t.amount;
+                      } else {
+                        if (t.paymentMethod === 'cash') totalCashExpense += t.amount;
+                        else if (t.paymentMethod === 'transfer') totalTransferExpense += t.amount;
+                      }
+                    });
+
+                    const totalIncome = totalCashIncome + totalPosIncome + totalTransferIncome;
+                    const totalExpense = totalCashExpense + totalTransferExpense;
                     const netBalance = totalIncome - totalExpense;
 
+                    const currentCash = totalCashIncome - totalCashExpense;
+                    const currentPos = totalPosIncome;
+                    const currentTransfer = totalTransferIncome - totalTransferExpense;
+
                     return (
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="card-glass p-8 rounded-[2.5rem] bg-emerald-50/50 border-emerald-100">
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <div className="card-glass p-6 rounded-[2.5rem] bg-emerald-50/50 border-emerald-100">
                           <div className="text-[10px] font-black uppercase tracking-widest text-emerald-600 mb-2">Toplam Gelir</div>
-                          <div className="text-3xl font-black text-emerald-700 tracking-tight">{formatCurrency(totalIncome)}</div>
-                          <div className="mt-4 flex gap-2 text-[10px] font-bold text-emerald-600/70">
-                            <span>Nakit: {formatCurrency(totalCash)}</span>
-                            <span>•</span>
-                            <span>POS: {formatCurrency(totalPos)}</span>
-                          </div>
+                          <div className="text-2xl font-black text-emerald-700 tracking-tight">{formatCurrency(totalIncome)}</div>
                         </div>
-                        <div className="card-glass p-8 rounded-[2.5rem] bg-rose-50/50 border-rose-100">
+                        <div className="card-glass p-6 rounded-[2.5rem] bg-rose-50/50 border-rose-100">
                           <div className="text-[10px] font-black uppercase tracking-widest text-rose-600 mb-2">Toplam Gider</div>
-                          <div className="text-3xl font-black text-rose-700 tracking-tight">{formatCurrency(totalExpense)}</div>
+                          <div className="text-2xl font-black text-rose-700 tracking-tight">{formatCurrency(totalExpense)}</div>
                         </div>
-                        <div className="card-glass p-8 rounded-[2.5rem] bg-indigo-50/50 border-indigo-100">
-                          <div className="text-[10px] font-black uppercase tracking-widest text-indigo-600 mb-2">Net Kalan</div>
-                          <div className="text-3xl font-black text-indigo-700 tracking-tight">{formatCurrency(netBalance)}</div>
+                        <div className="card-glass p-6 rounded-[2.5rem] bg-indigo-50/50 border-indigo-100">
+                          <div className="text-[10px] font-black uppercase tracking-widest text-indigo-600 mb-2">Net Durum</div>
+                          <div className="text-2xl font-black text-indigo-700 tracking-tight">{formatCurrency(netBalance)}</div>
+                        </div>
+                        <div className="card-glass p-6 rounded-[2.5rem] bg-slate-50/50 border-slate-200">
+                          <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Kasa Bakiyeleri</div>
+                          <div className="flex flex-col gap-1 text-xs font-bold text-slate-600">
+                            <div className="flex justify-between"><span>Nakit:</span> <span>{formatCurrency(currentCash)}</span></div>
+                            <div className="flex justify-between"><span>POS:</span> <span>{formatCurrency(currentPos)}</span></div>
+                            <div className="flex justify-between"><span>Havale:</span> <span>{formatCurrency(currentTransfer)}</span></div>
+                          </div>
                         </div>
                       </div>
                     );
                   })()}
 
-                  <div className="space-y-4">
-                    {accountEntries
-                      .filter(e => e.date >= accountFilterStart && e.date <= accountFilterEnd)
-                      .sort((a, b) => b.date.localeCompare(a.date)) // Sort date desc
-                      .map(entry => {
-                        const dailyIncome = (entry.cash || 0) + (entry.pos || 0) + (entry.transfer || 0);
-                        const dailyExpense = (entry.expenses || []).reduce((sum, ex) => sum + (ex.amount || 0), 0);
-                        const dailyNet = dailyIncome - dailyExpense;
+                  {(() => {
+                    const filtered = accountTransactions
+                      .filter(t => t.date >= accountFilterStart && t.date <= accountFilterEnd);
 
-                        return (
-                          <div
-                            key={entry.id}
-                            onClick={() => openAccountDetailModal(entry)}
-                            className="group relative overflow-hidden flex flex-col gap-6 p-8 card-glass rounded-[2.5rem] transition-all duration-300 tap-scale hover-glow cursor-pointer"
-                          >
-                            {/* Date Header */}
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-4">
-                                <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl font-black">
-                                  📅
-                                </div>
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="text-center py-32 card-glass rounded-[3rem] border-2 border-dashed border-slate-200/70">
+                          <div className="text-6xl mb-6 opacity-60 float-slow">💰</div>
+                          <h3 className="text-2xl font-black text-slate-700 tracking-tighter">İşlem Bulunamadı</h3>
+                          <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
+                            Bu tarih aralığında kayıt yok.
+                          </p>
+                        </div>
+                      );
+                    }
+
+                    // Group by date descending
+                    const byDate: Record<string, Transaction[]> = {};
+                    filtered.forEach(t => {
+                      if (!byDate[t.date]) byDate[t.date] = [];
+                      byDate[t.date].push(t);
+                    });
+                    const sortedDates = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
+
+                    return (
+                      <div className="space-y-5">
+                        {sortedDates.map(date => {
+                          const txs = byDate[date];
+                          const cashIncome = txs.filter(t => t.type === 'income' && t.paymentMethod === 'cash').reduce((s, t) => s + t.amount, 0);
+                          const posIncome = txs.filter(t => t.type === 'income' && t.paymentMethod === 'pos').reduce((s, t) => s + t.amount, 0);
+                          const transferIncome = txs.filter(t => t.type === 'income' && t.paymentMethod === 'transfer').reduce((s, t) => s + t.amount, 0);
+                          const totalIncome = cashIncome + posIncome + transferIncome;
+                          const expenses = txs.filter(t => t.type === 'expense');
+                          const totalExpense = expenses.reduce((s, t) => s + t.amount, 0);
+                          const net = totalIncome - totalExpense;
+                          const allPhotos = [...new Set(txs.flatMap(t => t.photos || []))];
+
+                          return (
+                            <div key={date} className="card-glass rounded-[2.5rem] overflow-hidden">
+                              {/* Day header */}
+                              <div className="flex items-center justify-between px-8 pt-6 pb-4 border-b border-slate-100/80">
                                 <div>
-                                  <div className="text-xl font-black text-slate-800">{formatDateDisplay(entry.date)}</div>
-                                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                                    Ekleyen: {users.find(u => u.id === entry.createdByUserId)?.name || 'Bilinmiyor'}
-                                  </div>
+                                  <div className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1">GÜNLÜK ÖZET</div>
+                                  <div className="text-2xl font-black text-slate-800 tracking-tight">{formatDateDisplay(date)}</div>
+                                </div>
+                                <div className={`text-xl font-black px-4 py-2 rounded-2xl ${net >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+                                  {net >= 0 ? '+' : ''}{formatCurrency(net)}
                                 </div>
                               </div>
-                              <div className="text-right">
-                                <div className="text-2xl font-black text-indigo-600">{formatCurrency(dailyNet)}</div>
-                                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Günlük Net</div>
-                              </div>
-                            </div>
 
-                            {/* Details Grid */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 rounded-3xl bg-white/40 border border-slate-200/50">
-                              <div className="space-y-3">
-                                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Gelirler</div>
-                                <div className="flex justify-between items-center text-sm font-bold text-slate-700 border-b border-slate-100 pb-2">
-                                  <span>Nakit</span>
-                                  <span>{formatCurrency(entry.cash || 0)}</span>
-                                </div>
-                                <div className="flex justify-between items-center text-sm font-bold text-slate-700 border-b border-slate-100 pb-2">
-                                  <span>POS</span>
-                                  <span>{formatCurrency(entry.pos || 0)}</span>
-                                </div>
-                                <div className="flex justify-between items-center text-sm font-bold text-slate-700 pb-2">
-                                  <span>Havale</span>
-                                  <span>{formatCurrency(entry.transfer || 0)}</span>
-                                </div>
-                              </div>
-                              <div className="space-y-3">
-                                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Giderler</div>
-                                {entry.expenses && entry.expenses.length > 0 ? (
-                                  entry.expenses.map((ex, idx) => (
-                                    <div key={idx} className="flex justify-between items-center text-sm font-bold text-slate-700 border-b border-slate-100 pb-2 last:border-0">
-                                      <span>{ex.description}</span>
-                                      <span className="text-rose-600">-{formatCurrency(ex.amount)}</span>
+                              <div className="px-8 py-5 space-y-5">
+                                {/* Income breakdown */}
+                                {totalIncome > 0 && (
+                                  <div>
+                                    <div className="text-[10px] font-black uppercase tracking-widest text-emerald-600 mb-3">📈 Gelir — {formatCurrency(totalIncome)}</div>
+                                    <div className="grid grid-cols-3 gap-3">
+                                      {cashIncome > 0 && (
+                                        <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-100">
+                                          <div className="text-[10px] font-black uppercase tracking-widest text-emerald-500 mb-1">Nakit</div>
+                                          <div className="text-lg font-black text-emerald-700">{formatCurrency(cashIncome)}</div>
+                                        </div>
+                                      )}
+                                      {posIncome > 0 && (
+                                        <div className="p-4 bg-blue-50/70 rounded-2xl border border-blue-100">
+                                          <div className="text-[10px] font-black uppercase tracking-widest text-blue-500 mb-1">POS</div>
+                                          <div className="text-lg font-black text-blue-700">{formatCurrency(posIncome)}</div>
+                                        </div>
+                                      )}
+                                      {transferIncome > 0 && (
+                                        <div className="p-4 bg-violet-50/70 rounded-2xl border border-violet-100">
+                                          <div className="text-[10px] font-black uppercase tracking-widest text-violet-500 mb-1">Havale</div>
+                                          <div className="text-lg font-black text-violet-700">{formatCurrency(transferIncome)}</div>
+                                        </div>
+                                      )}
                                     </div>
-                                  ))
-                                ) : (
-                                  <div className="text-sm font-bold text-slate-300 italic">Gider yok</div>
+                                  </div>
                                 )}
+
+                                {/* Expenses */}
+                                {expenses.length > 0 && (
+                                  <div>
+                                    <div className="text-[10px] font-black uppercase tracking-widest text-rose-500 mb-3">📉 Giderler — {formatCurrency(totalExpense)}</div>
+                                    <div className="space-y-2">
+                                      {expenses.map(exp => (
+                                        <div key={exp.id} className="flex items-center justify-between p-4 bg-rose-50/60 rounded-2xl border border-rose-100/70">
+                                          <div className="flex items-center gap-3 min-w-0">
+                                            <div className="w-8 h-8 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center text-sm font-black shrink-0">
+                                              {exp.paymentMethod === 'transfer' ? '🏦' : '💵'}
+                                            </div>
+                                            <div className="min-w-0">
+                                              <div className="text-sm font-black text-slate-700 truncate">{exp.description}</div>
+                                              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                                {exp.paymentMethod === 'transfer' ? 'Havale' : 'Nakit'} · {users.find(u => u.id === exp.createdByUserId)?.name || '?'}
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <div className="flex items-center gap-2 shrink-0">
+                                            <span className="text-sm font-black text-rose-600">-{formatCurrency(exp.amount)}</span>
+                                            <button
+                                              onClick={(e) => { e.stopPropagation(); deleteTransaction(exp.id); }}
+                                              className="p-1.5 rounded-xl text-slate-300 hover:text-rose-500 hover:bg-rose-100 transition-all"
+                                            >
+                                              <TrashIcon className="w-4 h-4" />
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Photos row */}
+                                {allPhotos.length > 0 && (
+                                  <div className="flex gap-2 flex-wrap">
+                                    {allPhotos.map((photo, idx) => (
+                                      <img
+                                        key={idx}
+                                        src={photo}
+                                        onClick={() => setLightboxPhoto(photo)}
+                                        className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-200 cursor-zoom-in hover:opacity-90 transition-opacity"
+                                        alt="Fiş"
+                                      />
+                                    ))}
+                                  </div>
+                                )}
+
+                                {/* Action buttons for this day */}
+                                <div className="flex gap-3 pt-1">
+                                  <button
+                                    onClick={() => openTransactionModal('income')}
+                                    className="flex-1 py-3 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-emerald-100 transition-all"
+                                  >
+                                    + Gelir
+                                  </button>
+                                  <button
+                                    onClick={() => openTransactionModal('expense')}
+                                    className="flex-1 py-3 bg-rose-50 text-rose-600 border border-rose-200 rounded-2xl text-xs font-black uppercase tracking-widest hover:bg-rose-100 transition-all"
+                                  >
+                                    + Gider
+                                  </button>
+                                </div>
                               </div>
                             </div>
-
-                            {/* Photos & Actions */}
-                            <div className="flex items-center justify-between mt-2">
-                              <div className="flex -space-x-3">
-                                {entry.photos && entry.photos.map((photo, idx) => (
-                                  <img key={idx} src={photo} className="w-10 h-10 rounded-full border-2 border-white object-cover" alt="Proof" />
-                                ))}
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  onClick={(e) => deleteAccountEntry(entry.id, e)}
-                                  className="p-3 rounded-2xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all z-10"
-                                >
-                                  <TrashIcon className="w-5 h-5" />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-
-                    {accountEntries.filter(e => e.date >= accountFilterStart && e.date <= accountFilterEnd).length === 0 && (
-                      <div className="text-center py-44 card-glass rounded-[4rem] border-2 border-dashed border-slate-200/70">
-                        <div className="text-8xl mb-8 opacity-60 float-slow">💰</div>
-                        <h3 className="text-3xl font-black text-slate-700 tracking-tighter">KAYIT YOK</h3>
-                        <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.3em] mt-3">
-                          Seçilen tarih aralığında hesap kaydı bulunamadı.
-                        </p>
+                          );
+                        })}
                       </div>
-                    )}
-                  </div>
+                    );
+                  })()}
                 </div>
               ) : (
                 <div className="max-w-4xl mx-auto space-y-10">
@@ -3360,190 +3536,7 @@ const App: React.FC = () => {
           </div>
         )}
 
-      {/* Account Modal */}
-      {isAccountModalOpen && (
-        <div className="fixed inset-0 modal-overlay z-[160] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
-          <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
-            <h3 className="text-4xl font-black mb-10 tracking-tighter text-slate-800">
-              {activeAccountEntryId ? 'Kayıt Düzenle' : 'Yeni Kayıt'}
-            </h3>
 
-            <div className="space-y-8">
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Tarih</label>
-                <input
-                  type="date"
-                  value={accountDate}
-                  onChange={(e) => setAccountDate(e.target.value)}
-                  className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Nakit Gelir</label>
-                  <input
-                    type="number"
-                    value={accountCash}
-                    onChange={(e) => setAccountCash(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-black text-emerald-600 text-lg"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">POS Gelir</label>
-                  <input
-                    type="number"
-                    value={accountPos}
-                    onChange={(e) => setAccountPos(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-black text-emerald-600 text-lg"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Havale Gelir</label>
-                  <input
-                    type="number"
-                    value={accountTransfer}
-                    onChange={(e) => setAccountTransfer(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-emerald-500/10 focus:border-emerald-600 font-black text-emerald-600 text-lg"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Giderler</label>
-                <div className="space-y-3 mb-4">
-                  {accountExpenses.map((expense, idx) => (
-                    <div key={idx} className="flex gap-2 items-center">
-                      <div className="flex-1 p-3 bg-rose-50 border border-rose-100 rounded-xl text-rose-800 font-bold text-sm">
-                        {expense.description}
-                      </div>
-                      <div className="w-24 p-3 bg-rose-50 border border-rose-100 rounded-xl text-rose-800 font-black text-sm text-right">
-                        -{expense.amount}
-                      </div>
-                      <button
-                        onClick={() => setAccountExpenses(prev => prev.filter((_, i) => i !== idx))}
-                        className="p-3 rounded-xl bg-slate-100 text-slate-400 hover:text-rose-600 hover:bg-rose-100"
-                      >
-                        <TrashIcon className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    id="new-expense-desc"
-                    type="text"
-                    placeholder="Gider Açıklaması"
-                    className="flex-1 p-3 bg-white border border-slate-200 rounded-xl outline-none focus:border-rose-400 text-sm font-bold"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        const descInput = document.getElementById('new-expense-desc') as HTMLInputElement;
-                        const amountInput = document.getElementById('new-expense-amount') as HTMLInputElement;
-                        const desc = descInput.value.trim();
-                        const amount = parseFloat(amountInput.value);
-                        if (desc && amount > 0) {
-                          setAccountExpenses(prev => [...prev, { id: Date.now().toString(), description: desc, amount }]);
-                          descInput.value = '';
-                          amountInput.value = '';
-                          descInput.focus();
-                        }
-                      }
-                    }}
-                  />
-                  <input
-                    id="new-expense-amount"
-                    type="number"
-                    placeholder="Tutar"
-                    className="w-24 p-3 bg-white border border-slate-200 rounded-xl outline-none focus:border-rose-400 text-sm font-bold"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        const descInput = document.getElementById('new-expense-desc') as HTMLInputElement;
-                        const amountInput = document.getElementById('new-expense-amount') as HTMLInputElement;
-                        const desc = descInput.value.trim();
-                        const amount = parseFloat(amountInput.value);
-                        if (desc && amount > 0) {
-                          setAccountExpenses(prev => [...prev, { id: Date.now().toString(), description: desc, amount }]);
-                          descInput.value = '';
-                          amountInput.value = '';
-                          descInput.focus();
-                        }
-                      }
-                    }}
-                  />
-                  <button
-                    onClick={() => {
-                      const descInput = document.getElementById('new-expense-desc') as HTMLInputElement;
-                      const amountInput = document.getElementById('new-expense-amount') as HTMLInputElement;
-                      const desc = descInput.value.trim();
-                      const amount = parseFloat(amountInput.value);
-                      if (desc && amount > 0) {
-                        setAccountExpenses(prev => [...prev, { id: Date.now().toString(), description: desc, amount }]);
-                        descInput.value = '';
-                        amountInput.value = '';
-                        descInput.focus();
-                      }
-                    }}
-                    className="px-4 py-2 bg-rose-500 text-white rounded-xl font-black text-sm hover:bg-rose-600"
-                  >
-                    EKLE
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Fotoğraf Ekle (Max 2)</label>
-                <div className="flex gap-4">
-                  {accountPhotos.map((photo, idx) => (
-                    <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border-2 border-slate-200 group">
-                      <img src={photo} className="w-full h-full object-cover" alt="Proof" />
-                      <button
-                        onClick={() => setAccountPhotos(prev => prev.filter((_, i) => i !== idx))}
-                        className="absolute inset-0 bg-black/50 hidden group-hover:flex items-center justify-center text-white"
-                      >
-                        <TrashIcon className="w-6 h-6" />
-                      </button>
-                    </div>
-                  ))}
-                  {accountPhotos.length < 2 && (
-                    <label className="w-24 h-24 rounded-2xl border-2 border-dashed border-slate-300 flex flex-col items-center justify-center cursor-pointer hover:border-indigo-400 hover:bg-indigo-50 transition-colors">
-                      <PlusIcon className="w-6 h-6 text-slate-400" />
-                      <input type="file" accept="image/*" className="hidden" onChange={handleAccountPhotoUpload} />
-                    </label>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 block">Not</label>
-                <textarea
-                  value={accountNote}
-                  onChange={(e) => setAccountNote(e.target.value)}
-                  className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600 text-sm h-24 resize-none"
-                  placeholder="İsteğe bağlı not..."
-                />
-              </div>
-
-              <div className="pt-6 border-t border-slate-100 flex gap-4">
-                <button
-                  onClick={() => setIsAccountModalOpen(false)}
-                  className="w-1/3 py-4 rounded-[1.5rem] bg-slate-100 text-slate-500 font-black uppercase tracking-wider hover:bg-slate-200 transition-colors"
-                >
-                  İptal
-                </button>
-                <button
-                  onClick={handleAddAccountEntry}
-                  className="flex-1 py-4 bg-gray-900 text-white rounded-[1.5rem] font-black shadow-xl hover:bg-gray-800 transition-all uppercase tracking-widest"
-                >
-                  {activeAccountEntryId ? 'GÜNCELLE' : 'KAYDET'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
       {/* Task Create Modal */}
       {
         isTaskModalOpen && (
@@ -4230,21 +4223,21 @@ const App: React.FC = () => {
         )
       }
 
-      {/* Account Detail Modal */}
+      {/* Transaction Detail Modal */}
       {isAccountDetailModalOpen && (() => {
-        const entry = accountEntries.find(e => e.id === activeAccountEntryId);
-        if (!entry) return null;
-        const totalIncome = (entry.cash || 0) + (entry.pos || 0) + (entry.transfer || 0);
-        const totalExpense = (entry.expenses || []).reduce((sum, ex) => sum + (ex.amount || 0), 0);
-        const netBalance = totalIncome - totalExpense;
+        const transaction = accountTransactions.find(t => t.id === activeDetailTransactionId);
+        if (!transaction) return null;
+
+        const isIncome = transaction.type === 'income';
+        const methodLabels = { cash: 'Nakit', pos: 'POS', transfer: 'Havale' };
 
         return (
           <div className="fixed inset-0 modal-overlay z-[170] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
             <div className="modal-shell w-full md:max-w-3xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
               <div className="flex items-center justify-between mb-8">
                 <div>
-                  <div className="text-sm font-black text-slate-400 uppercase tracking-widest mb-1">Hesap Detayı</div>
-                  <h3 className="text-4xl font-black tracking-tighter text-slate-800">{formatDateDisplay(entry.date)}</h3>
+                  <div className="text-sm font-black text-slate-400 uppercase tracking-widest mb-1">İşlem Detayı</div>
+                  <h3 className="text-4xl font-black tracking-tighter text-slate-800">{formatDateDisplay(transaction.date)}</h3>
                 </div>
                 <button
                   onClick={() => setIsAccountDetailModalOpen(false)}
@@ -4254,91 +4247,46 @@ const App: React.FC = () => {
                 </button>
               </div>
 
-              {/* Net Balance Card */}
-              <div className="p-8 rounded-[2.5rem] bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-xl shadow-indigo-200 mb-8 relative overflow-hidden">
+              {/* Amount Card */}
+              <div className={`p-8 rounded-[2.5rem] text-white shadow-xl mb-8 relative overflow-hidden ${isIncome ? 'bg-gradient-to-br from-emerald-500 to-teal-600 shadow-emerald-200' : 'bg-gradient-to-br from-rose-500 to-pink-600 shadow-rose-200'}`}>
                 <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -mr-10 -mt-10" />
-                <div className="relative z-10">
-                  <div className="text-emerald-200 font-black uppercase tracking-widest text-xs mb-2">Günlük Net Kalan</div>
-                  <div className="text-5xl font-black tracking-tight">{formatCurrency(netBalance)}</div>
+                <div className="relative z-10 flex justify-between items-end">
+                  <div>
+                    <div className="text-white/80 font-black uppercase tracking-widest text-xs mb-2">
+                      {isIncome ? 'GELİR TUTARI' : 'GİDER TUTARI'}
+                    </div>
+                    <div className="text-5xl font-black tracking-tight">{formatCurrency(transaction.amount)}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-white/80 font-black uppercase tracking-widest text-xs mb-2">ÖDEME YÖNTEMİ</div>
+                    <div className="text-2xl font-black">{methodLabels[transaction.paymentMethod]}</div>
+                  </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-                {/* Income Section */}
-                <div className="space-y-4">
-                  <h4 className="text-lg font-black text-emerald-600 flex items-center gap-2">
-                    <span>💰</span> Gelirler
-                  </h4>
-                  <div className="bg-emerald-50/50 p-6 rounded-[2rem] space-y-3 border border-emerald-100">
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-600 font-bold">Nakit</span>
-                      <span className="font-black text-emerald-700">{formatCurrency(entry.cash || 0)}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-600 font-bold">POS</span>
-                      <span className="font-black text-emerald-700">{formatCurrency(entry.pos || 0)}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-600 font-bold">Havale</span>
-                      <span className="font-black text-emerald-700">{formatCurrency(entry.transfer || 0)}</span>
-                    </div>
-                    <div className="pt-3 border-t border-emerald-200/50 flex justify-between items-center">
-                      <span className="text-emerald-800 font-black uppercase text-xs tracking-widest">Toplam</span>
-                      <span className="font-black text-emerald-800 text-lg">{formatCurrency(totalIncome)}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Expenses Section */}
-                <div className="space-y-4">
-                  <h4 className="text-lg font-black text-rose-600 flex items-center gap-2">
-                    <span>📉</span> Giderler
-                  </h4>
-                  <div className="bg-rose-50/50 p-6 rounded-[2rem] space-y-3 border border-rose-100 min-h-[140px]">
-                    {(entry.expenses || []).length > 0 ? (
-                      (entry.expenses || []).map((ex, idx) => (
-                        <div key={idx} className="flex justify-between items-center border-b border-rose-100/50 last:border-0 pb-2 last:pb-0">
-                          <span className="text-slate-600 font-bold truncate max-w-[150px]">{ex.description}</span>
-                          <span className="font-black text-rose-700">-{ex.amount} ₺</span>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="text-center text-slate-400 font-bold py-4 text-xs uppercase tracking-widest">Gider Yok</div>
-                    )}
-
-                    {(entry.expenses || []).length > 0 && (
-                      <div className="pt-3 border-t border-rose-200/50 flex justify-between items-center">
-                        <span className="text-rose-800 font-black uppercase text-xs tracking-widest">Toplam</span>
-                        <span className="font-black text-rose-800 text-lg">{formatCurrency(totalExpense)}</span>
-                      </div>
-                    )}
-                  </div>
+              <div className="mb-8">
+                {/* Description Section */}
+                <h4 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-4">Açıklama</h4>
+                <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 min-h-[100px]">
+                  <p className="text-xl font-bold text-slate-700 whitespace-pre-wrap">{transaction.description}</p>
                 </div>
               </div>
 
               {/* Photos Section */}
-              {entry.photos && entry.photos.length > 0 && (
+              {transaction.photos && transaction.photos.length > 0 && (
                 <div className="mb-8 p-6 bg-slate-50 rounded-[2rem] border border-slate-100">
                   <h4 className="text-sm font-black text-slate-500 uppercase tracking-widest mb-4">Fiş / Fotoğraflar</h4>
                   <div className="flex gap-4 overflow-x-auto pb-2">
-                    {entry.photos.map((photo, idx) => (
+                    {transaction.photos.map((photo, idx) => (
                       <div
                         key={idx}
                         onClick={() => setLightboxPhoto(photo)}
-                        className="relative w-32 h-32 rounded-2xl overflow-hidden cursor-zoom-in border-2 border-slate-200 hover:border-indigo-400 transition-all shadow-sm hover:shadow-md"
+                        className="relative w-32 h-32 rounded-2xl overflow-hidden cursor-zoom-in border-2 border-slate-200 transition-all shadow-sm hover:shadow-md"
                       >
                         <img src={photo} className="w-full h-full object-cover" alt="Detay" />
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
-
-              {/* Note Section */}
-              {entry.note && (
-                <div className="mb-8 p-6 bg-amber-50 rounded-[2rem] border border-amber-100 text-amber-900">
-                  <h4 className="text-[10px] font-black uppercase tracking-widest mb-2 opacity-60">Notlar</h4>
-                  <p className="font-bold whitespace-pre-wrap">{entry.note}</p>
                 </div>
               )}
 
@@ -4409,6 +4357,280 @@ const App: React.FC = () => {
           />
         </div>
       )}
+
+      {/* Account / Transaction Modal */}
+      {isAccountModalOpen && (
+        <div className="fixed inset-0 modal-overlay z-[200] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+          <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <h3 className="text-3xl font-black tracking-tighter text-slate-800">
+                  {activeTransactionId ? 'İşlemi Düzenle' : (transactionType === 'income' ? 'Gelir Ekle' : 'Gider Ekle')}
+                </h3>
+                <p className="text-slate-400 font-bold text-sm mt-1">
+                  {transactionType === 'income' ? 'Kasaya para girişi' : 'Kasadan para çıkışı'}
+                </p>
+              </div>
+              <button
+                onClick={() => setIsAccountModalOpen(false)}
+                className="p-4 bg-slate-100 rounded-2xl text-slate-500 hover:bg-slate-200 transition-colors"
+              >
+                <span className="text-2xl">✕</span>
+              </button>
+            </div>
+
+            {!activeTransactionId && (
+              <div className="flex bg-slate-100/50 p-2 rounded-3xl mb-8">
+                <button
+                  onClick={() => setTransactionType('income')}
+                  className={`flex-1 py-4 text-xs font-black uppercase tracking-widest rounded-2xl transition-all ${transactionType === 'income' ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-200' : 'text-slate-500 hover:bg-slate-200'}`}
+                >
+                  Gelir
+                </button>
+                <button
+                  onClick={() => setTransactionType('expense')}
+                  className={`flex-1 py-4 text-xs font-black uppercase tracking-widest rounded-2xl transition-all ${transactionType === 'expense' ? 'bg-rose-500 text-white shadow-lg shadow-rose-200' : 'text-slate-500 hover:bg-slate-200'}`}
+                >
+                  Gider
+                </button>
+              </div>
+            )}
+
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 pl-4">Tarih</label>
+                  <input
+                    type="date"
+                    value={transactionDate}
+                    onChange={(e) => setTransactionDate(e.target.value)}
+                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-black text-slate-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 pl-4">Açıklama</label>
+                  <input
+                    type="text"
+                    value={transactionDescription}
+                    onChange={(e) => setTransactionDescription(e.target.value)}
+                    placeholder="Örn: Günlük Ciro"
+                    className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-bold text-slate-600"
+                  />
+                </div>
+              </div>
+
+              {transactionType === 'income' && !activeTransactionId ? (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 pl-4">Nakit (TL)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={incomeCashAmount}
+                      onChange={(e) => setIncomeCashAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-black text-slate-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 pl-4">POS/Kart (TL)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={incomePosAmount}
+                      onChange={(e) => setIncomePosAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-black text-slate-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 pl-4">Havale/EFT (TL)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={incomeTransferAmount}
+                      onChange={(e) => setIncomeTransferAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-black text-slate-700"
+                    />
+                  </div>
+                  <div className="col-span-1 md:col-span-3">
+                    <p className="text-xs text-slate-400 font-bold pl-4">Not: Sadece doldurduğunuz alanlar kaydedilecektir.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 pl-4">Kasa / Ödeme Tipi</label>
+                    <select
+                      value={transactionPaymentMethod}
+                      onChange={(e) => setTransactionPaymentMethod(e.target.value as PaymentMethod)}
+                      className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-black text-slate-700 appearance-none cursor-pointer"
+                    >
+                      <option value="cash">Nakit</option>
+                      {transactionType === 'income' && <option value="pos">POS</option>}
+                      <option value="transfer">Havale / EFT</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 pl-4">Tutar (TL)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={transactionAmount}
+                      onChange={(e) => setTransactionAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full p-5 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-8 focus:ring-indigo-500/10 focus:border-indigo-600 font-black text-slate-700 text-xl"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Photo Upload for Transaction */}
+              <div className="p-6 bg-slate-50 border border-slate-100 rounded-[2rem]">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h4 className="text-sm font-black text-slate-700">Fotoğraf Yükle</h4>
+                    <p className="text-xs text-slate-400 font-bold">İşlem belgesi (Fiş, fatura, dekont)</p>
+                  </div>
+                  <label className="cursor-pointer px-6 py-3 bg-indigo-50 text-indigo-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-indigo-100 transition-colors">
+                    SEÇ
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={handleTransactionPhotoUpload}
+                    />
+                  </label>
+                </div>
+
+                {transactionPhotos.length > 0 && (
+                  <div className="flex gap-4 overflow-x-auto pb-2 custom-scrollbar">
+                    {transactionPhotos.map((photo, index) => (
+                      <div key={index} className="relative w-24 h-24 shrink-0 rounded-2xl overflow-hidden group border border-slate-200">
+                        <img src={photo} className="w-full h-full object-cover" alt="Proof" />
+                        <button
+                          onClick={() => setTransactionPhotos(prev => prev.filter((_, i) => i !== index))}
+                          className="absolute inset-0 bg-rose-500/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all font-black"
+                        >
+                          ✕ Sil
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-6">
+                <button
+                  onClick={handleAddTransaction}
+                  className={`w-full py-6 text-white rounded-[2rem] font-black shadow-2xl transition-all active:scale-95 uppercase tracking-[0.2em] text-sm ${transactionType === 'income' ? 'bg-gradient-to-r from-emerald-500 to-teal-500 shadow-emerald-200 hover:shadow-emerald-300' : 'bg-gradient-to-r from-rose-500 to-pink-500 shadow-rose-200 hover:shadow-rose-300'}`}
+                >
+                  {activeTransactionId ? 'GÜNCELLE' : 'KAYDET'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Account Detail Modal */}
+      {isAccountDetailModalOpen && activeDetailTransactionId && (() => {
+        const transaction = accountTransactions.find(t => t.id === activeDetailTransactionId);
+        if (!transaction) return null;
+
+        const isIncome = transaction.type === 'income';
+        const methodLabels = { cash: 'Nakit', pos: 'POS', transfer: 'Havale / EFT' };
+
+        return (
+          <div className="fixed inset-0 modal-overlay z-[150] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
+            <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
+              <div className="flex items-center justify-between mb-8">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border ${isIncome ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
+                      {isIncome ? 'GELİR' : 'GİDER'}
+                    </span>
+                    <span className="px-3 py-1 rounded-full bg-slate-50 text-slate-700 border border-slate-200 text-[10px] font-black uppercase tracking-widest">
+                      {methodLabels[transaction.paymentMethod]}
+                    </span>
+                  </div>
+                  <h3 className="text-4xl font-black tracking-tighter text-slate-800">{formatDateDisplay(transaction.date)}</h3>
+                </div>
+                <button
+                  onClick={() => setIsAccountDetailModalOpen(false)}
+                  className="p-4 bg-slate-100 rounded-2xl text-slate-500 hover:bg-slate-200 transition-colors"
+                >
+                  <span className="text-2xl">✕</span>
+                </button>
+              </div>
+
+              <div className="space-y-6 mb-8">
+                <div className={`p-8 rounded-[2rem] border-2 shadow-xl ${isIncome ? 'bg-emerald-50 border-emerald-100 shadow-emerald-100/50' : 'bg-rose-50 border-rose-100 shadow-rose-100/50'}`}>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Açıklama</div>
+                  <div className="text-xl font-bold text-slate-700 mb-6">{transaction.description}</div>
+
+                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Tutar</div>
+                  <div className="text-5xl font-black tracking-tight flex items-center gap-2">
+                    <span className={isIncome ? 'text-emerald-500' : 'text-rose-500'}>{isIncome ? '+' : '-'}</span>
+                    {formatCurrency(transaction.amount)}
+                  </div>
+                  <div className="mt-4 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    Ekleyen: {users.find(u => u.id === transaction.createdByUserId)?.name || 'Bilinmiyor'} · {new Date(transaction.createdAt).toLocaleString('tr-TR')}
+                  </div>
+                </div>
+
+                {transaction.photos && transaction.photos.length > 0 && (
+                  <div className="p-6 bg-slate-50 rounded-[2rem] border border-slate-200">
+                    <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-4">Belgeler ({transaction.photos.length})</h4>
+                    <div className="flex gap-4 overflow-x-auto pb-2 custom-scrollbar">
+                      {transaction.photos.map((photo, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => setLightboxPhoto(photo)}
+                          className="relative w-32 h-32 shrink-0 rounded-2xl overflow-hidden cursor-zoom-in group shadow-sm hover:shadow-xl transition-all border border-slate-200"
+                        >
+                          <img src={photo} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" alt={`Belge ${idx + 1}`} />
+                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <span className="bg-white/90 text-slate-800 text-[10px] font-black px-3 py-2 rounded-xl backdrop-blur-sm">BÜYÜT</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-4 pt-6 border-t border-slate-100">
+                {currentUser?.role === 'admin' && (
+                  <button
+                    onClick={(e) => {
+                      if (confirm('Bu işlemi silmek istediğinize emin misiniz?')) {
+                        deleteTransaction(transaction.id, e);
+                      }
+                    }}
+                    className="px-6 py-4 bg-rose-50 text-rose-600 rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-rose-100 transition-colors flex items-center gap-2"
+                  >
+                    <TrashIcon className="w-4 h-4" /> Sil
+                  </button>
+                )}
+
+                <div className="flex-1"></div>
+
+                {(currentUser?.role === 'admin' || currentUser?.id === transaction.createdByUserId) && (
+                  <button
+                    onClick={handleEditFromDetail}
+                    className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest hover:bg-slate-700 transition-colors shadow-lg"
+                  >
+                    Düzenle
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Task Detail Modal */}
       {isTaskDetailModalOpen && (() => {
@@ -4896,25 +5118,25 @@ const App: React.FC = () => {
         )
       }
 
-      {/* Account Entry Modal */}
+      {/* Transaction Modal */}
       {
         isAccountModalOpen && (
           <div className="fixed inset-0 modal-overlay z-[120] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
             <div className="modal-shell w-full md:max-w-2xl p-8 md:p-12 animate-sheet-in max-h-[92vh] overflow-y-auto custom-scrollbar">
               <div className="flex items-center gap-4 mb-8">
-                <div className="w-16 h-16 rounded-[2rem] flex items-center justify-center bg-emerald-100 text-emerald-600 text-3xl">
-                  💰
+                <div className={`w-16 h-16 rounded-[2rem] flex items-center justify-center text-3xl ${transactionType === 'income' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
+                  {transactionType === 'income' ? '📈' : '📉'}
                 </div>
                 <div className="flex-1">
                   <h3 className="text-3xl font-black tracking-tighter text-slate-800">
-                    {activeAccountEntryId ? 'Hesap Kaydını Düzenle' : 'Yeni Hesap Kaydı'}
+                    {activeTransactionId ? 'İşlemi Düzenle' : (transactionType === 'income' ? 'Yeni Gelir Eklentisi' : 'Yeni Gider Eklentisi')}
                   </h3>
-                  <p className="text-slate-400 font-bold text-sm mt-1">Gelir ve gider bilgilerini girin</p>
+                  <p className="text-slate-400 font-bold text-sm mt-1">İşlem detaylarını girin</p>
                 </div>
                 <button
                   onClick={() => {
                     setIsAccountModalOpen(false);
-                    resetAccountForm();
+                    resetTransactionForm();
                   }}
                   className="w-10 h-10 rounded-2xl flex items-center justify-center text-slate-400 hover:bg-slate-100 transition-colors"
                 >
@@ -4923,143 +5145,117 @@ const App: React.FC = () => {
               </div>
 
               <div className="space-y-6">
-                {/* Tarih */}
-                <div>
-                  <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Tarih</label>
-                  <input
-                    type="date"
-                    value={accountDate}
-                    onChange={(e) => setAccountDate(e.target.value)}
-                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
-                  />
-                </div>
-
-                {/* Gelirler */}
-                <div className="p-6 bg-emerald-50/50 rounded-3xl border border-emerald-100">
-                  <div className="text-xs font-black uppercase tracking-widest text-emerald-600 mb-4">Gelirler</div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-2">Nakit (₺)</label>
-                      <input
-                        type="number"
-                        value={accountCash}
-                        onChange={(e) => setAccountCash(e.target.value)}
-                        placeholder="0"
-                        className="w-full p-3 bg-white border border-emerald-200 rounded-xl outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-2">POS (₺)</label>
-                      <input
-                        type="number"
-                        value={accountPos}
-                        onChange={(e) => setAccountPos(e.target.value)}
-                        placeholder="0"
-                        className="w-full p-3 bg-white border border-emerald-200 rounded-xl outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-2">Havale (₺)</label>
-                      <input
-                        type="number"
-                        value={accountTransfer}
-                        onChange={(e) => setAccountTransfer(e.target.value)}
-                        placeholder="0"
-                        className="w-full p-3 bg-white border border-emerald-200 rounded-xl outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Giderler */}
-                <div className="p-6 bg-rose-50/50 rounded-3xl border border-rose-100">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="text-xs font-black uppercase tracking-widest text-rose-600">Giderler</div>
+                {/* Type Selection (Only shown when adding new) */}
+                {!activeTransactionId && (
+                  <div className="flex p-1 bg-slate-100 rounded-2xl">
                     <button
-                      onClick={handleAddExpense}
-                      className="px-4 py-2 bg-rose-600 text-white rounded-xl font-bold text-xs hover:bg-rose-700 transition-colors"
+                      onClick={() => setTransactionType('income')}
+                      className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${transactionType === 'income'
+                        ? 'bg-white text-emerald-600 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                        }`}
                     >
-                      + Gider Ekle
+                      Gelir
+                    </button>
+                    <button
+                      onClick={() => setTransactionType('expense')}
+                      className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all ${transactionType === 'expense'
+                        ? 'bg-white text-rose-600 shadow-sm'
+                        : 'text-slate-500 hover:text-slate-700'
+                        }`}
+                    >
+                      Gider
                     </button>
                   </div>
+                )}
 
-                  {accountExpenses.length === 0 ? (
-                    <div className="text-center py-8 text-slate-400 font-bold text-sm">
-                      Henüz gider eklenmedi
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {/* Date */}
+                  <div>
+                    <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Tarih</label>
+                    <input
+                      type="date"
+                      value={transactionDate}
+                      onChange={(e) => setTransactionDate(e.target.value)}
+                      className={`w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 font-bold text-slate-600 ${transactionType === 'income' ? 'focus:ring-emerald-500/10 focus:border-emerald-600' : 'focus:ring-rose-500/10 focus:border-rose-600'}`}
+                    />
+                  </div>
+
+                  {/* Payment Method */}
+                  <div>
+                    <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Ödeme Yöntemi</label>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setTransactionPaymentMethod('cash')}
+                        className={`flex-1 py-3 px-2 rounded-xl text-sm font-bold border-2 transition-all ${transactionPaymentMethod === 'cash' ? (transactionType === 'income' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-rose-500 bg-rose-50 text-rose-700') : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                      >
+                        Nakit
+                      </button>
+                      <button
+                        onClick={() => setTransactionPaymentMethod('pos')}
+                        className={`flex-1 py-3 px-2 rounded-xl text-sm font-bold border-2 transition-all ${transactionPaymentMethod === 'pos' ? (transactionType === 'income' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-rose-500 bg-rose-50 text-rose-700') : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                      >
+                        POS
+                      </button>
+                      <button
+                        onClick={() => setTransactionPaymentMethod('transfer')}
+                        className={`flex-1 py-3 px-2 rounded-xl text-sm font-bold border-2 transition-all ${transactionPaymentMethod === 'transfer' ? (transactionType === 'income' ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-rose-500 bg-rose-50 text-rose-700') : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                      >
+                        Havale
+                      </button>
                     </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {accountExpenses.map((expense, index) => (
-                        <div key={expense.id} className="flex gap-3 items-start p-4 bg-white rounded-2xl border border-rose-200">
-                          <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-3">
-                            <input
-                              type="text"
-                              value={expense.description}
-                              onChange={(e) => handleExpenseChange(index, 'description', e.target.value)}
-                              placeholder="Açıklama"
-                              className="p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-600 font-bold text-slate-600 text-sm"
-                            />
-                            <input
-                              type="number"
-                              value={expense.amount || ''}
-                              onChange={(e) => handleExpenseChange(index, 'amount', parseFloat(e.target.value) || 0)}
-                              placeholder="Tutar (₺)"
-                              className="p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-600 font-bold text-slate-600 text-sm"
-                            />
-                            <select
-                              value={expense.paymentMethod}
-                              onChange={(e) => handleExpenseChange(index, 'paymentMethod', e.target.value)}
-                              className="p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-600 font-bold text-slate-600 text-sm"
-                            >
-                              <option value="cash">💵 Nakit</option>
-                              <option value="transfer">🏦 Havale</option>
-                            </select>
-                          </div>
-                          <button
-                            onClick={() => handleRemoveExpense(index)}
-                            className="w-10 h-10 flex items-center justify-center text-rose-400 hover:text-rose-600 hover:bg-rose-100 rounded-xl transition-colors"
-                          >
-                            🗑️
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  </div>
                 </div>
 
-                {/* Not */}
+                {/* Amount */}
                 <div>
-                  <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Not (Opsiyonel)</label>
+                  <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Tutar (₺)</label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      value={transactionAmount}
+                      onChange={(e) => setTransactionAmount(e.target.value)}
+                      placeholder="0.00"
+                      className={`w-full p-4 pl-12 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 text-xl font-black text-slate-800 ${transactionType === 'income' ? 'focus:ring-emerald-500/10 focus:border-emerald-600' : 'focus:ring-rose-500/10 focus:border-rose-600'}`}
+                    />
+                    <span className="absolute left-5 top-1/2 -translate-y-1/2 text-xl font-black text-slate-400">₺</span>
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Açıklama</label>
                   <textarea
-                    value={accountNote}
-                    onChange={(e) => setAccountNote(e.target.value)}
-                    placeholder="Ek bilgiler..."
-                    rows={3}
-                    className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-600 font-bold text-slate-600 resize-none"
+                    value={transactionDescription}
+                    onChange={(e) => setTransactionDescription(e.target.value)}
+                    placeholder="İşlem detayı..."
+                    rows={2}
+                    className={`w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl outline-none focus:ring-4 font-bold text-slate-600 resize-none ${transactionType === 'income' ? 'focus:ring-emerald-500/10 focus:border-emerald-600' : 'focus:ring-rose-500/10 focus:border-rose-600'}`}
                   />
                 </div>
 
-                {/* Fotoğraflar */}
+                {/* Photos */}
                 <div>
-                  <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Fotoğraflar</label>
+                  <label className="block text-xs font-black uppercase tracking-widest text-slate-400 mb-3">Fotoğraflar (Opsiyonel)</label>
                   <div className="flex flex-wrap gap-3">
-                    {accountPhotos.map((photo, index) => (
-                      <div key={index} className="relative w-24 h-24 rounded-2xl overflow-hidden border-2 border-slate-200">
+                    {transactionPhotos.map((photo, index) => (
+                      <div key={index} className="relative w-24 h-24 rounded-2xl overflow-hidden border-2 border-slate-200 group">
                         <img src={photo} alt={`Photo ${index + 1}`} className="w-full h-full object-cover" />
                         <button
-                          onClick={() => setAccountPhotos(prev => prev.filter((_, i) => i !== index))}
-                          className="absolute top-1 right-1 w-6 h-6 bg-rose-500 text-white rounded-lg text-xs flex items-center justify-center hover:bg-rose-600"
+                          onClick={() => setTransactionPhotos(prev => prev.filter((_, i) => i !== index))}
+                          className="absolute inset-0 bg-rose-500/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                         >
-                          ✕
+                          <TrashIcon className="w-6 h-6" />
                         </button>
                       </div>
                     ))}
-                    {accountPhotos.length < 2 && (
-                      <label className="w-24 h-24 rounded-2xl border-2 border-dashed border-slate-300 flex items-center justify-center cursor-pointer hover:border-emerald-500 hover:bg-emerald-50 transition-colors">
+                    {transactionPhotos.length < 5 && (
+                      <label className={`w-24 h-24 rounded-2xl border-2 border-dashed border-slate-300 flex items-center justify-center cursor-pointer transition-colors ${transactionType === 'income' ? 'hover:border-emerald-500 hover:bg-emerald-50' : 'hover:border-rose-500 hover:bg-rose-50'}`}>
                         <input
                           type="file"
                           accept="image/*"
-                          onChange={handleAccountPhotoUpload}
+                          onChange={handleTransactionPhotoUpload}
+                          multiple
                           className="hidden"
                         />
                         <span className="text-3xl text-slate-400">📷</span>
@@ -5069,21 +5265,21 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Buttons */}
-                <div className="flex gap-4 pt-4">
+                <div className="flex gap-4 pt-6 mt-4 border-t border-slate-100">
                   <button
                     onClick={() => {
                       setIsAccountModalOpen(false);
-                      resetAccountForm();
+                      resetTransactionForm();
                     }}
                     className="flex-1 py-4 font-black text-slate-400 hover:text-slate-600 uppercase text-xs tracking-widest transition-colors"
                   >
                     İptal
                   </button>
                   <button
-                    onClick={handleAddAccountEntry}
-                    className="flex-[2] py-4 bg-emerald-600 text-white rounded-[2rem] font-black shadow-xl shadow-emerald-200 hover:bg-emerald-700 active:scale-95 transition-all uppercase text-xs tracking-widest"
+                    onClick={handleAddTransaction}
+                    className={`flex-[2] py-4 text-white rounded-[2rem] font-black shadow-xl active:scale-95 transition-all uppercase text-xs tracking-widest ${transactionType === 'income' ? 'bg-emerald-600 shadow-emerald-200 hover:bg-emerald-700' : 'bg-rose-600 shadow-rose-200 hover:bg-rose-700'}`}
                   >
-                    {activeAccountEntryId ? 'Güncelle' : 'Kaydet'}
+                    {activeTransactionId ? 'Güncelle' : 'Kaydet'}
                   </button>
                 </div>
               </div>
